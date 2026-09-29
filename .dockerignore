@@ -1,0 +1,12 @@
+node_modules
+dist
+coverage
+.git
+.husky
+.env
+.env.*
+!.env.example
+src/generated
+*.tsbuildinfo
+*.log
+.DS_Store
