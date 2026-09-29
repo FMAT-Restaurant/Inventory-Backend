@@ -1,114 +1,372 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Inventory Backend
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Backend de inventario con NestJS, Prisma y PostgreSQL. Esta guía permite preparar el proyecto desde cero, arrancarlo de dos formas y comprobar que la aplicación se conecta a la base de datos.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Inicio rápido
 
-## Description
+1. Clona el repositorio y abre una terminal en su carpeta raíz, donde están `package.json` y `compose.yaml`.
+2. Instala Node.js, Git y Docker con Compose si aún no los tienes. Abre Docker Desktop o inicia tu motor de Docker.
+3. Crea tu archivo local de variables e instala las dependencias:
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+   ```bash
+   cp .env.example .env
+   npm ci
+   ```
 
-## Project setup
+   En PowerShell, usa `Copy-Item .env.example .env` en lugar de `cp`. Si ya tienes un `.env`, consérvalo y no repitas la copia.
 
-```bash
-$ npm install
-```
+4. Arranca la base de datos y la aplicación:
 
-## Compile and run the project
+   ```bash
+   docker compose up -d --build --wait
+   ```
 
-```bash
-# development
-$ npm run start
+5. Abre <http://localhost:3000/>. Debes ver `Hello World!`. Consulta el estado con `docker compose ps`: tanto `app` como `db` deben aparecer como `healthy`.
 
-# watch mode
-$ npm run start:dev
+Cuando termines, ejecuta `docker compose down`. Esto detiene los contenedores sin borrar el volumen de datos.
 
-# production mode
-$ npm run start:prod
-```
+## 1. Componentes del proyecto
 
-## Run tests
+| Componente         | Para qué sirve                                                            |
+| ------------------ | ------------------------------------------------------------------------- |
+| NestJS             | Aplicación en `src/` con módulo, controlador y servicio iniciales.        |
+| Prisma             | Esquema, configuración, cliente generado y servicio integrado con NestJS. |
+| PostgreSQL         | Servicio `db` de Compose, con PostgreSQL 16.                              |
+| App + db en Docker | `Dockerfile` para NestJS y `compose.yaml` con ambos servicios.            |
+| Linting            | Oxlint, ejecutado mediante `npm run lint`.                                |
+| Husky              | Hooks de Git instalados mediante el script `prepare`.                     |
+| Commitlint         | Validación del mensaje del commit con Conventional Commits.               |
 
-```bash
-# unit tests
-$ npm run test
+El proyecto ofrece la infraestructura inicial. Aún no hay modelos de inventario ni tablas de negocio en PostgreSQL.
 
-# e2e tests
-$ npm run test:e2e
+## 2. Requisitos para trabajar
 
-# test coverage
-$ npm run test:cov
-```
+- Git, para clonar el repositorio y utilizar los hooks.
+- Node.js y npm, para desarrollar fuera del contenedor. Dentro de la rama Node 22, usa una versión 22.22.3 o superior para cumplir también los requisitos de las herramientas de NestJS instaladas.
+- Docker con Compose. En macOS puedes utilizar Docker Desktop y mantener su motor ejecutándose.
+- Puertos `3000` y `5432` disponibles en tu computadora.
 
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+Comprueba las herramientas antes de continuar:
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+node --version
+npm --version
+docker compose version
+docker info
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+Si `docker info` no puede conectar, inicia Docker Desktop o el motor de Docker y vuelve a intentarlo.
 
-## Observability
+En esta configuración se usa `docker compose`, con espacio. La consigna lo llama `docker-compose`; el archivo de configuración es `compose.yaml`.
 
-In production applications, observability is essential for understanding how your system behaves, detecting issues early, and maintaining reliable performance.
+## 3. Preparar el entorno después de clonar
 
-[NestJS Observe](https://observe.nestjs.com) automatically instruments your NestJS application, giving you deep visibility into your system with minimal setup:
+Ejecuta los comandos desde la raíz del repositorio:
 
-- **Distributed tracing:** Follow requests across services and understand how they flow through your system.
-- **Waterfall analysis:** Visualize request execution and identify slow operations, bottlenecks, and unexpected delays.
-- **Performance analysis:** Analyze application performance in real time and quickly pinpoint areas that need optimization.
-- **Metrics:** Track key application and infrastructure metrics to understand system health and performance trends.
-- **Logging:** Centralize and correlate logs with traces and other telemetry to make debugging easier.
-- **Error tracking:** Detect errors quickly and investigate their root causes with the surrounding context.
-- **SLA monitoring:** Track service-level objectives and identify when your application is approaching or exceeding defined thresholds.
-- **Alarms and alerts:** Set up alerts for critical errors, performance degradation, SLA violations, and other anomalies so your team can react quickly.
+```bash
+cp .env.example .env
+npm ci
+```
 
-## Resources
+Copia `.env.example` solamente si todavía no tienes tu `.env`. No sobrescribas una configuración local existente. En PowerShell, el comando de copia es `Copy-Item .env.example .env`.
 
-Check out a few resources that may come in handy when working with NestJS:
+`npm ci` instala las versiones resueltas en `package-lock.json`. Al finalizar, npm ejecuta:
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Auto-instrument your application with [NestJS Observer](https://observer.nestjs.com). Distributed tracing, metrics, and logging made easy. Error tracking and performance monitoring for your NestJS applications.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+- `postinstall`: genera el cliente de Prisma.
+- `prepare`: activa Husky en este repositorio.
 
-## Support
+Si trabajas exclusivamente con los contenedores, Docker instala las dependencias de la app durante la construcción. Para que los hooks funcionen al hacer commits desde tu computadora, necesitas también las dependencias locales y la ejecución de `prepare`.
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+### Variables de entorno
 
-## Stay in touch
+El archivo de ejemplo contiene:
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+```dotenv
+POSTGRES_USER=inventory
+POSTGRES_PASSWORD=inventory_dev
+POSTGRES_DB=inventory
+DATABASE_URL=postgresql://inventory:inventory_dev@localhost:5432/inventory?schema=public
+PORT=3000
+```
 
-## License
+| Variable            | Para qué sirve                                               |
+| ------------------- | ------------------------------------------------------------ |
+| `POSTGRES_USER`     | Usuario que PostgreSQL crea al inicializar un volumen vacío. |
+| `POSTGRES_PASSWORD` | Contraseña de ese usuario.                                   |
+| `POSTGRES_DB`       | Base de datos inicial.                                       |
+| `DATABASE_URL`      | Dirección de conexión de Prisma al trabajar localmente.      |
+| `PORT`              | Puerto de NestJS al trabajar localmente.                     |
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+Son valores de ejemplo para desarrollo. Cada integrante puede usar los mismos: tendrá una base de datos independiente en su computadora.
+
+`.env` se excluye de Git. `.env.example` sí se comparte en el repositorio.
+
+Para mantener la configuración sencilla, utiliza los valores del ejemplo. Si los cambias, actualiza también `DATABASE_URL`. Los caracteres especiales de las credenciales requieren codificación adecuada en una URL; Compose construye su URL directamente con las variables `POSTGRES_*`.
+
+## 4. Cómo levantar todo en Docker
+
+Abre Docker Desktop o inicia tu motor de Docker y ejecuta:
+
+```bash
+docker compose up --build
+```
+
+El comando construye la imagen de NestJS y levanta ambos servicios. Los logs permanecen en esa terminal.
+
+Para dejarlos en segundo plano y esperar a que estén sanos:
+
+```bash
+docker compose up -d --build --wait
+```
+
+Para arranques posteriores, si no cambiaste el código ni las dependencias:
+
+```bash
+docker compose up
+```
+
+La conexión dentro de Docker es:
+
+```text
+Navegador → localhost:3000 → app (NestJS + Prisma) → db:5432 (PostgreSQL)
+```
+
+Abre `http://localhost:3000/`. El endpoint inicial responde `Hello World!`.
+
+### Cómo está configurado Docker Compose
+
+**Servicio `db`:**
+
+- Usa la imagen `postgres:16`.
+- Lee las credenciales de `.env` mediante la interpolación de Compose.
+- Publica PostgreSQL en el puerto `5432` de tu computadora.
+- Guarda los datos en el volumen `postgres_data`, montado en `/var/lib/postgresql/data`.
+- Su `healthcheck` ejecuta `pg_isready`.
+
+**Servicio `app`:**
+
+- Construye la imagen usando el `Dockerfile` del proyecto.
+- Publica NestJS en el puerto `3000`.
+- Recibe `PORT=3000` y una `DATABASE_URL` construida con las credenciales de PostgreSQL y el host `db`.
+- Espera a que `db` esté sano mediante `depends_on` y `condition: service_healthy`.
+- Su `healthcheck` comprueba que el endpoint inicial responda correctamente por HTTP.
+
+Dentro del contenedor, `localhost` corresponde al propio contenedor. Por eso la app utiliza `db`, el nombre del servicio de PostgreSQL. Las variables inyectadas por Compose tienen prioridad frente a la carga de `.env` mediante dotenv.
+
+### Cómo está configurado el Dockerfile
+
+1. Parte de `node:22-bookworm-slim`.
+2. Instala OpenSSL para las herramientas de Prisma.
+3. Trabaja en `/app`.
+4. Define `HUSKY=0` para omitir la instalación de hooks dentro del contenedor.
+5. Copia los archivos de dependencias y la configuración de Prisma.
+6. Ejecuta `npm ci`, que también genera el cliente de Prisma.
+7. Copia el resto del proyecto y ejecuta `npm run build`.
+8. Arranca con `npm run start:dev`.
+
+`.dockerignore` evita copiar dependencias locales, archivos compilados, Git, hooks y el `.env` a la imagen.
+
+La configuración actual no monta tu código local dentro del contenedor. Si cambias archivos en tu computadora, utiliza `docker compose up --build` para incorporar esos cambios a la imagen. Para trabajar con recarga automática de tus archivos locales, utiliza el modo siguiente.
+
+## 5. Cómo desarrollar con NestJS local y PostgreSQL en Docker
+
+Si la app de Docker está ejecutándose, detén solo esa app para liberar el puerto `3000`:
+
+```bash
+docker compose stop app
+```
+
+Después:
+
+```bash
+docker compose up -d --wait db
+npm run start:dev
+```
+
+En este modo, la conexión es:
+
+```text
+NestJS + Prisma en tu computadora → localhost:5432 → PostgreSQL en Docker
+```
+
+`prestart:dev` genera el cliente de Prisma antes de arrancar. `start:dev` ejecuta `nest start --watch`, que recompila y reinicia la app cuando cambias el código.
+
+Para detener NestJS local, presiona `Ctrl+C` en su terminal.
+
+Para volver a ejecutar la app dentro de Docker, primero detén NestJS local y después ejecuta `docker compose up -d --build --wait`.
+
+## 6. Cómo se integró Prisma con NestJS
+
+El proyecto utiliza Prisma, su cliente y el adaptador PostgreSQL en la versión `7.10.0`, junto con `pg` y `dotenv`.
+
+### Archivos de Prisma
+
+- `prisma/schema.prisma`: declara el proveedor `postgresql` y el generador `prisma-client`, con formato ESM. El cliente se genera en `src/generated/prisma`.
+- `prisma.config.ts`: carga `.env`, indica la ubicación del esquema y obtiene la conexión desde `DATABASE_URL` para las herramientas de Prisma.
+- `src/generated/prisma`: código generado automáticamente; no se guarda en Git.
+
+El esquema no tiene modelos todavía. Generar el cliente no crea tablas ni modifica los datos.
+
+### Archivos de integración con NestJS
+
+- `src/prisma/prisma.service.ts`: carga las variables, exige `DATABASE_URL` y crea Prisma con el adaptador `PrismaPg`.
+- `src/prisma/prisma.module.ts`: registra y exporta el servicio para que otros módulos puedan utilizarlo.
+- `src/app.module.ts`: importa `PrismaModule` para integrarlo en la aplicación.
+- `src/main.ts`: permite escuchar conexiones en `0.0.0.0` y activa los hooks de cierre de NestJS.
+
+Al iniciar la app, `PrismaService` abre la conexión y ejecuta `SELECT 1`. Si funciona, muestra:
+
+```text
+Conexion con PostgreSQL verificada
+```
+
+Si falla, la app no completa su arranque. Al cerrar la aplicación mediante su ciclo de vida, el servicio desconecta Prisma.
+
+Puedes regenerar el cliente manualmente con:
+
+```bash
+npm run prisma:generate
+```
+
+También se genera automáticamente después de instalar dependencias, antes de compilar y antes de `start:dev`.
+
+## 7. Linting, Husky y Commitlint
+
+### Linting: revisar el código
+
+Oxlint revisa `src/` y `test/` y excluye el cliente generado por Prisma:
+
+```bash
+npm run lint
+```
+
+Linting revisa problemas en el código. Prettier se utiliza para el formato.
+
+### Husky: ejecutar controles durante los commits
+
+El script `prepare` ejecuta `husky` para configurar los hooks locales. Puedes activarlos nuevamente con:
+
+```bash
+npm run prepare
+```
+
+- `.husky/pre-commit` ejecuta `npm run lint`. Si falla, el commit se detiene.
+- `.husky/commit-msg` ejecuta Commitlint sobre el archivo del mensaje de commit, recibido como `$1`.
+
+Los controles se ejecutan en la computadora donde se hace el commit; no dentro de PostgreSQL ni de la app en Docker.
+
+### Commitlint: revisar el mensaje del commit
+
+`commitlint.config.cjs` extiende `@commitlint/config-conventional`.
+
+El formato básico es:
+
+```text
+tipo: descripción
+```
+
+También admite un alcance:
+
+```text
+tipo(alcance): descripción
+```
+
+Ejemplos:
+
+```text
+chore: configure backend infrastructure
+feat(products): add product endpoint
+fix: correct database connection
+```
+
+Un mensaje como `cambios` se rechaza porque no tiene la estructura requerida.
+
+Después de preparar tus archivos con `git add`, puedes crear un commit así:
+
+```bash
+git commit -m "chore: configurar infraestructura del backend"
+```
+
+Husky ejecutará primero lint y luego Commitlint validará el mensaje.
+
+## 8. Cómo verificar la configuración
+
+### Compilación y pruebas locales
+
+```bash
+npm run lint
+npm run build
+npm test
+```
+
+La prueba de integración necesita PostgreSQL disponible y `DATABASE_URL` configurada:
+
+```bash
+docker compose up -d --wait db
+npm run test:e2e
+```
+
+### Contenedores y conexión
+
+```bash
+docker compose ps
+docker compose logs app
+docker compose logs db
+curl http://localhost:3000/
+```
+
+Ambos servicios deben aparecer como `healthy`. Los logs de la app deben mostrar la confirmación de la conexión, y la solicitud HTTP debe responder `Hello World!`.
+
+### Ejecutar consultas en PostgreSQL
+
+Para probar una consulta sin entrar a la consola interactiva, ejecuta desde la raíz del proyecto:
+
+```bash
+docker compose exec db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT 1 AS ok;"'
+```
+
+Debe aparecer una fila con el valor `1`. El contenedor debe estar encendido; si no lo está, inicia primero `docker compose up -d --wait db`.
+
+Para escribir varias consultas, entra a `psql`:
+
+```bash
+docker compose exec db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+```
+
+Cuando veas un prompt como `inventory=#`, escribe una consulta completa y pulsa Enter:
+
+```sql
+SELECT 1;
+```
+
+El punto y coma termina la consulta. Usa `\dt` para listar tablas y `\q` para salir. Por ahora, `\dt` puede indicar que no hay relaciones porque todavía no se han creado modelos ni migraciones.
+
+En Docker Desktop también puedes abrir el contenedor `db`, entrar en la pestaña **Exec** y ejecutar `psql -U inventory -d inventory` con los valores del `.env.example`. Luego usa los mismos comandos de `psql`.
+
+## 9. Detener servicios y conservar los datos
+
+Para detener los contenedores y eliminar la red de Compose:
+
+```bash
+docker compose down
+```
+
+El volumen conserva los datos. No uses `docker compose down -v` si quieres conservarlos: esa opción elimina el volumen.
+
+Clonar el repositorio no copia los datos de otro integrante. Comparte el código y la configuración; cada computadora mantiene su volumen independiente.
+
+Las variables `POSTGRES_*` inicializan PostgreSQL cuando su volumen está vacío. Cambiarlas después en `.env` no modifica automáticamente los usuarios, contraseñas o bases de datos existentes.
+
+## 10. Problemas frecuentes
+
+| Problema                              | Qué revisar                                                                                              |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Docker no conecta con su motor        | Abre Docker Desktop o inicia el motor correspondiente.                                                   |
+| Puerto `3000` ocupado                 | Detén la app local o el servicio `app` de Compose antes de arrancar el otro modo.                        |
+| Puerto `5432` ocupado                 | Revisa si ya tienes otro PostgreSQL o contenedor utilizando ese puerto.                                  |
+| Falta una variable                    | Copia `.env.example` a `.env` si aún no existe y revisa sus valores.                                     |
+| Prisma rechaza la conexión            | Comprueba que `db` esté sano y que las credenciales y el host sean correctos.                            |
+| Cambié la contraseña y no funciona    | El volumen puede conservar la contraseña anterior; cambiar `.env` no cambia las credenciales existentes. |
+| No se ven cambios de código en Docker | Reconstruye la imagen con `docker compose up --build`.                                                   |
+| El commit se rechaza                  | Revisa la salida del lint o el formato del mensaje.                                                      |
+| No se ejecutan los hooks              | Instala dependencias locales y ejecuta `npm run prepare`.                                                |
