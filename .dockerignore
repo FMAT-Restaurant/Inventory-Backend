@@ -7,6 +7,7 @@ coverage
 .env.*
 !.env.example
 src/generated
+openapi.yml
 *.tsbuildinfo
 *.log
 .DS_Store

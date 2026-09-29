@@ -1,1 +1,2 @@
+bash .husky/commit-conventional-custom.sh "$1"
 npx --no -- commitlint --edit "$1"

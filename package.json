@@ -24,12 +24,14 @@
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prebuild": "npm run prisma:generate",
-    "prestart:dev": "npm run prisma:generate"
+    "prestart:dev": "npm run prisma:generate",
+    "openapi:generate": "npm run build && node dist/generate-openapi.js"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",
     "@nestjs/core": "^12.0.1",
     "@nestjs/platform-express": "^12.0.1",
+    "@nestjs/swagger": "12.0.2",
     "@prisma/adapter-pg": "7.10.0",
     "@prisma/client": "7.10.0",
     "dotenv": "18.0.4",
@@ -57,6 +59,7 @@
     "supertest": "^7.0.0",
     "typescript": "^6.0.2",
     "vite-tsconfig-paths": "^5.1.4",
-    "vitest": "^4.1.2"
+    "vitest": "^4.1.2",
+    "yaml": "2.9.1"
   }
 }
