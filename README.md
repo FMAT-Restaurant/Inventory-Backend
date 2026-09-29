@@ -1,6 +1,6 @@
 # Inventory Backend
 
-Backend de inventario con NestJS, Prisma y PostgreSQL. Esta guía permite preparar el proyecto desde cero, arrancarlo de dos formas y comprobar que la aplicación se conecta a la base de datos.
+Backend de inventario con NestJS, Prisma y PostgreSQL. Esta guía permite preparar el proyecto desde cero, arrancarlo de dos formas, consultar su documentación OpenAPI y comprobar la conexión a la base de datos.
 
 ## Inicio rápido
 
@@ -21,7 +21,7 @@ Backend de inventario con NestJS, Prisma y PostgreSQL. Esta guía permite prepar
    docker compose up -d --build --wait
    ```
 
-5. Abre <http://localhost:3000/>. Debes ver `Hello World!`. Consulta el estado con `docker compose ps`: tanto `app` como `db` deben aparecer como `healthy`.
+5. Abre <http://localhost:3000/>. Debes ver `Hello World!`. La documentación de la API está en <http://localhost:3000/api>. Consulta el estado con `docker compose ps`: tanto `app` como `db` deben aparecer como `healthy`.
 
 Cuando termines, ejecuta `docker compose down`. Esto detiene los contenedores sin borrar el volumen de datos.
 
@@ -31,6 +31,7 @@ Cuando termines, ejecuta `docker compose down`. Esto detiene los contenedores si
 | ------------------ | ------------------------------------------------------------------------- |
 | NestJS             | Aplicación en `src/` con módulo, controlador y servicio iniciales.        |
 | Prisma             | Esquema, configuración, cliente generado y servicio integrado con NestJS. |
+| OpenAPI            | Documentación interactiva y especificación `openapi.yml` generada.        |
 | PostgreSQL         | Servicio `db` de Compose, con PostgreSQL 16.                              |
 | App + db en Docker | `Dockerfile` para NestJS y `compose.yaml` con ambos servicios.            |
 | Linting            | Oxlint, ejecutado mediante `npm run lint`.                                |
@@ -42,7 +43,7 @@ El proyecto ofrece la infraestructura inicial. Aún no hay modelos de inventario
 ## 2. Requisitos para trabajar
 
 - Git, para clonar el repositorio y utilizar los hooks.
-- Node.js y npm, para desarrollar fuera del contenedor. Dentro de la rama Node 22, usa una versión 22.22.3 o superior para cumplir también los requisitos de las herramientas de NestJS instaladas.
+- Node.js y npm, para desarrollar fuera del contenedor. La versión del proyecto está fijada en `.nvmrc` (`22.23.3`).
 - Docker con Compose. En macOS puedes utilizar Docker Desktop y mantener su motor ejecutándose.
 - Puertos `3000` y `5432` disponibles en tu computadora.
 
@@ -230,7 +231,21 @@ npm run prisma:generate
 
 También se genera automáticamente después de instalar dependencias, antes de compilar y antes de `start:dev`.
 
-## 7. Linting, Husky y Commitlint
+## 7. Documentación OpenAPI
+
+Con la aplicación encendida, abre <http://localhost:3000/api> para ver y probar los endpoints en Swagger UI. El documento JSON está en <http://localhost:3000/api-json>. Actualmente describe el endpoint inicial `GET /`; al agregar endpoints se incluirán en el documento generado por NestJS.
+
+Para generar el archivo YAML que se adjuntará a un release:
+
+```bash
+npm run openapi:generate
+```
+
+El comando compila la aplicación y escribe `openapi.yml` en la raíz. No necesita una base de datos en ejecución: crea el documento sin arrancar el servidor ni abrir una conexión. El archivo se genera automáticamente en CI y al publicar un release, por lo que está excluido de Git.
+
+`src/openapi.config.ts` concentra el título y la versión del documento. Si defines `APP_VERSION`, esa versión aparecerá en el YAML; el workflow de release la obtiene del tag `vX.Y.Z`.
+
+## 8. Linting, Husky y Commitlint
 
 ### Linting: revisar el código
 
@@ -250,8 +265,8 @@ El script `prepare` ejecuta `husky` para configurar los hooks locales. Puedes ac
 npm run prepare
 ```
 
-- `.husky/pre-commit` ejecuta `npm run lint`. Si falla, el commit se detiene.
-- `.husky/commit-msg` ejecuta Commitlint sobre el archivo del mensaje de commit, recibido como `$1`.
+- `.husky/pre-commit` ejecuta `npm test`. Si falla una prueba, el commit se detiene.
+- `.husky/commit-msg` valida el prefijo con el script del proyecto y después ejecuta Commitlint. El mensaje debe usar uno de estos tipos: `feat`, `fix`, `build`, `chore`, `ci`, `docs`, `style`, `refactor`, `perf` o `test`.
 
 Los controles se ejecutan en la computadora donde se hace el commit; no dentro de PostgreSQL ni de la app en Docker.
 
@@ -279,7 +294,7 @@ feat(products): add product endpoint
 fix: correct database connection
 ```
 
-Un mensaje como `cambios` se rechaza porque no tiene la estructura requerida.
+Un mensaje como `cambios` se rechaza porque no tiene la estructura requerida. No es obligatorio incluir número de issue o ticket, ni se modifica el mensaje automáticamente.
 
 Después de preparar tus archivos con `git add`, puedes crear un commit así:
 
@@ -287,9 +302,15 @@ Después de preparar tus archivos con `git add`, puedes crear un commit así:
 git commit -m "chore: configurar infraestructura del backend"
 ```
 
-Husky ejecutará primero lint y luego Commitlint validará el mensaje.
+Husky ejecutará las pruebas antes del commit; luego el script de prefijos y Commitlint validarán el mensaje.
 
-## 8. Cómo verificar la configuración
+## 9. CI y releases en GitHub
+
+El workflow `.github/workflows/on_pr.yml` se ejecuta cuando se abre o actualiza un pull request hacia `main`, y cuando hay un push a `main`. Instala dependencias y ejecuta lint, pruebas unitarias, compilación y generación de OpenAPI. Usa la versión de Node definida en `.nvmrc`.
+
+El workflow `.github/workflows/release.yml` se ejecuta al publicar un tag que coincida con `v*.*.*`, por ejemplo `v1.0.0`. Genera notas a partir de los commits mediante `scripts/changelog.sh`, genera `openapi.yml` con la versión del tag y crea un GitHub Release con ambos elementos. Si falla la generación de OpenAPI, el release se detiene.
+
+## 10. Cómo verificar la configuración
 
 ### Compilación y pruebas locales
 
@@ -297,6 +318,7 @@ Husky ejecutará primero lint y luego Commitlint validará el mensaje.
 npm run lint
 npm run build
 npm test
+npm run openapi:generate
 ```
 
 La prueba de integración necesita PostgreSQL disponible y `DATABASE_URL` configurada:
@@ -343,7 +365,7 @@ El punto y coma termina la consulta. Usa `\dt` para listar tablas y `\q` para sa
 
 En Docker Desktop también puedes abrir el contenedor `db`, entrar en la pestaña **Exec** y ejecutar `psql -U inventory -d inventory` con los valores del `.env.example`. Luego usa los mismos comandos de `psql`.
 
-## 9. Detener servicios y conservar los datos
+## 11. Detener servicios y conservar los datos
 
 Para detener los contenedores y eliminar la red de Compose:
 
@@ -357,7 +379,7 @@ Clonar el repositorio no copia los datos de otro integrante. Comparte el código
 
 Las variables `POSTGRES_*` inicializan PostgreSQL cuando su volumen está vacío. Cambiarlas después en `.env` no modifica automáticamente los usuarios, contraseñas o bases de datos existentes.
 
-## 10. Problemas frecuentes
+## 12. Problemas frecuentes
 
 | Problema                              | Qué revisar                                                                                              |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------- |
