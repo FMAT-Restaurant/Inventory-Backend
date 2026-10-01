@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
-import { PrismaModule } from './prisma/prisma.module.js';
+import { BrokerModule } from './broker/broker.module.js'; // 1. Importa tu módulo del broker
 
 @Module({
-  imports: [PrismaModule],
+  imports: [
+    BrokerModule, // 2. Agrégalo aquí en los imports
+  ],
   controllers: [AppController],
   providers: [AppService],
 })

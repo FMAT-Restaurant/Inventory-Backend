@@ -1,12 +1,22 @@
 import { Controller, Get } from '@nestjs/common';
-import { AppService } from './app.service.js';
+import { EventPublisher } from './broker/event-publisher.service.js';
 
-@Controller()
+@Controller('test-broker')
 export class AppController {
-  constructor(private readonly appService: AppService) {}
+  constructor(private readonly eventPublisher: EventPublisher) {}
 
-  @Get()
-  getHello(): string {
-    return this.appService.getHello();
+  @Get('publicar')
+  async probarPublicacion() {
+    const exchangeName = 'mi_exchange_prueba';
+    const routingKey = 'evento.prueba.enviado';
+    const payload = {
+      mensaje: '¡Hola desde mi microservicio!',
+      fecha: new Date().toISOString(),
+    };
+
+    // Publica el evento hacia el broker independiente
+    await this.eventPublisher.publish(exchangeName, routingKey, payload);
+
+    return { status: 'Evento publicado con éxito desde el microservicio' };
   }
 }
