@@ -4,10 +4,8 @@ import { SwaggerModule } from '@nestjs/swagger';
 import { stringify } from 'yaml';
 import { createOpenApiConfig } from './openapi.config.js';
 
-// Nest requiere DATABASE_URL para construir PrismaService. Generar el documento
-// no inicializa la aplicación ni abre una conexión con PostgreSQL.
-process.env.DATABASE_URL ??=
-  'postgresql://openapi:openapi@localhost:5432/openapi';
+// Generar el documento OpenAPI no requiere una conexión activa con MongoDB.
+process.env.MONGODB_URI ??= 'mongodb://127.0.0.1:27017/inventory';
 
 const { AppModule } = await import('./app.module.js');
 const app = await NestFactory.create(AppModule, { logger: false });
