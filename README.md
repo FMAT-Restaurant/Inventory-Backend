@@ -357,3 +357,6 @@ Las variables `MONGO_INITDB_*` inicializan MongoDB cuando su volumen está vací
 | No se ven cambios de código en Docker | Reconstruye la imagen con `docker compose up --build`.                                                   |
 | El commit se rechaza                  | Revisa la salida del lint o el formato del mensaje.                                                      |
 | No se ejecutan los hooks              | Instala dependencias locales y ejecuta `npm run prepare`.                                                |
+
+## Code Quality
+This project uses SonarQube Cloud for static code analysis.
