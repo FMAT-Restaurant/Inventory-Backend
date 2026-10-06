@@ -13,5 +13,6 @@ import { Ingredient, IngredientSchema } from './schemas/ingredient.schema.js';
   ],
   controllers: [IngredientsController],
   providers: [IngredientService],
+  exports: [IngredientService],
 })
 export class IngredientsModule {}
