@@ -4,9 +4,10 @@ import { AppService } from './app.service.js';
 import { DatabaseModule } from './database/database.module.js';
 import { IngredientsModule } from './modules/ingredient/ingredient.module.js';
 import { BatchModule } from './modules/batch/batch.module.js';
+import { SuppliersModule } from './modules/suppliers/supplier.module.js';
 
 @Module({
-  imports: [DatabaseModule, IngredientsModule, BatchModule],
+  imports: [DatabaseModule, IngredientsModule, BatchModule, SuppliersModule],
   controllers: [AppController],
   providers: [AppService],
 })
