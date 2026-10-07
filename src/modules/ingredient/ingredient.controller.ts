@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiConflictResponse,
@@ -40,5 +40,14 @@ export class IngredientsController {
   @ApiNotFoundResponse({ description: 'Ingrediente no encontrado' })
   findOne(@Param('id') id: string) {
     return this.ingredientsService.findOne(id);
+  }
+
+  @Delete(':id')
+  @ApiOperation({ summary: 'Eliminar un ingrediente' })
+  @ApiParam({ name: 'id', description: 'ID único del ingrediente (ObjectId)' })
+  @ApiOkResponse({ description: 'Ingrediente eliminado con éxito' })
+  @ApiNotFoundResponse({ description: 'Ingrediente no encontrado' })
+  remove(@Param('id') id: string) {
+    return this.ingredientsService.remove(id);
   }
 }

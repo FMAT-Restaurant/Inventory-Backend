@@ -19,6 +19,7 @@ describe('IngredientsController', () => {
     create: vi.fn().mockResolvedValue(mockIngredient),
     findAll: vi.fn().mockResolvedValue([mockIngredient]),
     findOne: vi.fn().mockResolvedValue(mockIngredient),
+    remove: vi.fn().mockResolvedValue(undefined),
   };
 
   beforeEach(async () => {
@@ -60,10 +61,23 @@ describe('IngredientsController', () => {
 
   describe('create', () => {
     it('debería crear un nuevo ingrediente', async () => {
-      const dto = { name: 'Tomate', unit: 'kg', stock: 10, cost: 15 };
+      const dto = {
+        name: 'Tomate',
+        unit: 'kg',
+        minStock: 10,
+        category: 'Verduras',
+      };
       const result = await controller.create(dto);
       expect(service.create).toHaveBeenCalledWith(dto);
       expect(result).toEqual(mockIngredient);
+    });
+  });
+
+  describe('remove', () => {
+    it('debería eliminar un ingrediente', async () => {
+      const result = await controller.remove('507f1f77bcf86cd799439011');
+      expect(service.remove).toHaveBeenCalledWith('507f1f77bcf86cd799439011');
+      expect(result).toBeUndefined();
     });
   });
 });

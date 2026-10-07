@@ -1,5 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import {
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
 
 export class CreateIngredientDto {
   @ApiProperty({ description: 'Nombre del ingrediente', example: 'Tomate' })
@@ -12,14 +18,24 @@ export class CreateIngredientDto {
   @IsNotEmpty()
   unit: string;
 
-  @ApiProperty({ description: 'Cantidad en stock', example: 10 })
+  @ApiProperty({ description: 'Cantidad en minima para el stock', example: 10 })
   @IsNumber()
   @Min(0)
-  stock: number;
+  minStock: number;
 
-  @ApiPropertyOptional({ description: 'Costo unitario', example: 15.5, default: 0 })
-  @IsNumber()
-  @Min(0)
+  @ApiProperty({
+    description: 'Categoría del ingrediente',
+    example: 'Verduras',
+  })
+  @IsString()
+  @IsNotEmpty()
+  category: string;
+
+  @ApiPropertyOptional({
+    description: 'ID del proveedor sugerido',
+    example: '507f1f77bcf86cd799439011',
+  })
+  @IsString()
   @IsOptional()
-  cost?: number;
+  supplierIdSugested?: string;
 }

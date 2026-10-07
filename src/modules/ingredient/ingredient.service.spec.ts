@@ -10,6 +10,7 @@ describe('IngredientService', () => {
 
   const mockExecFind = vi.fn();
   const mockExecFindById = vi.fn();
+  const mockExecDeleteOne = vi.fn();
   const mockSave = vi.fn();
 
   function MockModel(this: any, dto: any) {
@@ -18,6 +19,7 @@ describe('IngredientService', () => {
   }
   MockModel.find = vi.fn().mockReturnValue({ exec: mockExecFind });
   MockModel.findById = vi.fn().mockReturnValue({ exec: mockExecFindById });
+  MockModel.deleteOne = vi.fn().mockReturnValue({ exec: mockExecDeleteOne });
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -81,6 +83,34 @@ describe('IngredientService', () => {
     it('debería lanzar NotFoundException si el ID no es un ObjectId válido', async () => {
       await expect(service.findOne('id-invalido')).rejects.toThrow(NotFoundException);
       expect(MockModel.findById).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('remove', () => {
+    it('debería eliminar un ingrediente existente', async () => {
+      mockExecDeleteOne.mockResolvedValue({ deletedCount: 1 });
+
+      await expect(
+        service.remove('507f1f77bcf86cd799439011'),
+      ).resolves.toBeUndefined();
+      expect(MockModel.deleteOne).toHaveBeenCalledWith({
+        _id: '507f1f77bcf86cd799439011',
+      });
+    });
+
+    it('debería lanzar NotFoundException si no existe el ingrediente', async () => {
+      mockExecDeleteOne.mockResolvedValue({ deletedCount: 0 });
+
+      await expect(
+        service.remove('507f1f77bcf86cd799439011'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('debería lanzar NotFoundException si el ID no es un ObjectId válido', async () => {
+      await expect(service.remove('id-invalido')).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(MockModel.deleteOne).not.toHaveBeenCalled();
     });
   });
 
