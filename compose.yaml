@@ -4,6 +4,7 @@ services:
     environment:
       MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME:?Define MONGO_INITDB_ROOT_USERNAME en .env}:${MONGO_INITDB_ROOT_PASSWORD:?Define MONGO_INITDB_ROOT_PASSWORD en .env}@db:27017/${MONGO_INITDB_DATABASE:?Define MONGO_INITDB_DATABASE en .env}?authSource=admin
       PORT: 3000
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
     ports:
       - '3000:3000'
     depends_on:
