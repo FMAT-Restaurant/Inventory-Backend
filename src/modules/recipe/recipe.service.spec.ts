@@ -33,7 +33,10 @@ describe('RecipeService', () => {
     _id: new Types.ObjectId(mockIngredientId1),
     name: 'Carne',
     unit: 'kg',
+    availableStock: 2,
+    totalStock: 2,
     stock: 2, // 2 / 0.2 = 10 porciones
+    averageCost: 50,
     cost: 50,
   };
 
@@ -41,7 +44,10 @@ describe('RecipeService', () => {
     _id: new Types.ObjectId(mockIngredientId2),
     name: 'Pan',
     unit: 'pza',
+    availableStock: 5,
+    totalStock: 5,
     stock: 5, // 5 / 1 = 5 porciones
+    averageCost: 5,
     cost: 5,
   };
 
@@ -145,7 +151,12 @@ describe('RecipeService', () => {
       mockIngredientService.findOne.mockImplementation((id: string) => {
         if (id === mockIngredientId1) return Promise.resolve(ingredient1);
         if (id === mockIngredientId2)
-          return Promise.resolve({ ...ingredient2, stock: 0 });
+          return Promise.resolve({
+            ...ingredient2,
+            stock: 0,
+            availableStock: 0,
+            totalStock: 0,
+          });
         return Promise.reject(new NotFoundException());
       });
 

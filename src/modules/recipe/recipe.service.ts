@@ -220,8 +220,21 @@ export class RecipeService {
       (item) => {
         const ingId = item.ingredientId.toString();
         const ingredient = ingredientMap.get(ingId);
-        const stock = ingredient?.stock ?? 0;
-        const cost = ingredient?.cost ?? 0;
+        const ingInfo = ingredient as unknown as
+          | {
+              availableStock?: number;
+              totalStock?: number;
+              stock?: number;
+              averageCost?: number;
+              cost?: number;
+            }
+          | undefined;
+        const stock =
+          ingInfo?.availableStock ??
+          ingInfo?.totalStock ??
+          ingInfo?.stock ??
+          0;
+        const cost = ingInfo?.averageCost ?? ingInfo?.cost ?? 0;
         const name = ingredient?.name ?? 'Desconocido';
         const unit = ingredient?.unit ?? '';
         const hasSufficient = stock >= item.requiredQuantity;
