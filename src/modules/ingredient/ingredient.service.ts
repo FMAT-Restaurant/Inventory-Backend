@@ -55,4 +55,15 @@ export class IngredientService {
 
     return ingredient;
   }
+
+  async remove(id: string): Promise<void> {
+    if (!isValidObjectId(id)) {
+      throw new NotFoundException(`Ingrediente con id '${id}' no encontrado`);
+    }
+
+    const result = await this.ingredientModel.deleteOne({ _id: id }).exec();
+    if (result.deletedCount === 0) {
+      throw new NotFoundException(`Ingrediente con id '${id}' no encontrado`);
+    }
+  }
 }
