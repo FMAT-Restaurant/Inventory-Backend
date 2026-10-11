@@ -1,12 +1,26 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
+  OnModuleDestroy,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model, Types } from 'mongoose';
 import { Ingredient } from '../ingredient/schemas/ingredient.schema.js';
 import { IngredientService } from '../ingredient/ingredient.service.js';
+import {
+  INGREDIENT_CHANGED_EVENT,
+  IngredientChangeEmitter,
+  IngredientChangedEvent,
+} from '../ingredient/ingredient-change.emitter.js';
+import { EventPublisher } from '../../broker/event-publisher.service.js';
+import {
+  INVENTORY_EXCHANGE,
+  InventoryRoutingKeys,
+  RecipeAvailabilityChangedEvent,
+} from '../../broker/event-conventions.js';
 import { Recipe } from './schemas/recipe.schema.js';
 import { CreateRecipeDto } from './dto/create-recipe.dto.js';
 import { UpdateRecipeDto } from './dto/update-recipe.dto.js';
@@ -19,11 +33,37 @@ import {
 const DUPLICATE_KEY_ERROR_CODE = 11000;
 
 @Injectable()
-export class RecipeService {
+export class RecipeService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(RecipeService.name);
+
   constructor(
     @InjectModel(Recipe.name) private readonly recipeModel: Model<Recipe>,
     private readonly ingredientService: IngredientService,
+    private readonly ingredientChangeEmitter: IngredientChangeEmitter,
+    private readonly publisher: EventPublisher,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    // Cuando cambia un ingrediente, recalculamos y publicamos la
+    // disponibilidad de las recetas que lo usan
+    this.ingredientChangeEmitter.on(
+      INGREDIENT_CHANGED_EVENT,
+      this.handleIngredientChanged,
+    );
+  }
+
+  onModuleDestroy(): void {
+    this.ingredientChangeEmitter.off(
+      INGREDIENT_CHANGED_EVENT,
+      this.handleIngredientChanged,
+    );
+  }
+
+  private readonly handleIngredientChanged = (
+    event: IngredientChangedEvent,
+  ): void => {
+    void this.publishAvailabilityForIngredient(event);
+  };
 
   async registerOrUpdate(
     createDto: CreateRecipeDto,
@@ -66,8 +106,11 @@ export class RecipeService {
       }
     }
 
+    const response = this.buildResponseDto(recipe, ingredientMap);
+    await this.publishAvailabilityChanged(response);
+
     return {
-      recipe: this.buildResponseDto(recipe, ingredientMap),
+      recipe: response,
       isNew,
     };
   }
@@ -148,18 +191,83 @@ export class RecipeService {
       false,
     );
 
-    return this.buildResponseDto(recipe, ingredientMap);
+    const response = this.buildResponseDto(recipe, ingredientMap);
+    await this.publishAvailabilityChanged(response);
+
+    return response;
   }
 
   async remove(idOrPlateId: string): Promise<void> {
-    const filter = isValidObjectId(idOrPlateId)
-      ? { $or: [{ _id: idOrPlateId }, { plateId: idOrPlateId }] }
-      : { plateId: idOrPlateId };
+    const recipe = await this.findEntityByIdOrPlateId(idOrPlateId);
 
-    const result = await this.recipeModel.deleteOne(filter).exec();
+    const result = await this.recipeModel
+      .deleteOne({ _id: recipe._id })
+      .exec();
     if (result.deletedCount === 0) {
       throw new NotFoundException(
         `Receta con identificador '${idOrPlateId}' no encontrada`,
+      );
+    }
+
+    // La receta ya no existe: avisamos al menú que no está disponible
+    await this.publishAvailabilityChanged({
+      plateId: recipe.plateId,
+      name: recipe.name,
+      isAvailable: false,
+      maxPreparablePortions: 0,
+      productionCost: 0,
+    });
+  }
+
+  private async publishAvailabilityChanged(
+    data: Pick<
+      RecipeAvailabilityChangedEvent,
+      'plateId' | 'name' | 'isAvailable' | 'maxPreparablePortions' | 'productionCost'
+    >,
+  ): Promise<void> {
+    const event: RecipeAvailabilityChangedEvent = {
+      ...data,
+      timestamp: new Date().toISOString(),
+    };
+
+    try {
+      await this.publisher.publish(
+        INVENTORY_EXCHANGE,
+        InventoryRoutingKeys.RecipeAvailabilityChanged,
+        event,
+      );
+    } catch (error) {
+      // Un broker caído no debe impedir la operación de negocio
+      this.logger.warn(
+        `No se pudo publicar '${InventoryRoutingKeys.RecipeAvailabilityChanged}' para plateId '${data.plateId}': ${error}`,
+      );
+    }
+  }
+
+  private async publishAvailabilityForIngredient(
+    event: IngredientChangedEvent,
+  ): Promise<void> {
+    try {
+      const recipes = await this.recipeModel
+        .find({ 'items.ingredientId': new Types.ObjectId(event.ingredientId) })
+        .exec();
+
+      for (const recipe of recipes) {
+        const ingredientIds = recipe.items.map((item) =>
+          item.ingredientId.toString(),
+        );
+        const ingredientMap = await this.validateAndFetchIngredients(
+          ingredientIds,
+          false,
+        );
+        await this.publishAvailabilityChanged(
+          this.buildResponseDto(recipe, ingredientMap),
+        );
+      }
+    } catch (error) {
+      this.logger.error(
+        `Error al recalcular disponibilidad tras '${event.action}' del ingrediente '${event.ingredientId}':`,
+        error,
       );
     }
   }

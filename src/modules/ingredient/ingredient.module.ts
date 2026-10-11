@@ -3,6 +3,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { IngredientsController } from './ingredient.controller.js';
 import { IngredientService } from './ingredient.service.js';
 import { Ingredient, IngredientSchema } from './schemas/ingredient.schema.js';
+import { IngredientChangeEmitter } from './ingredient-change.emitter.js';
 
 @Module({
   imports: [
@@ -12,7 +13,7 @@ import { Ingredient, IngredientSchema } from './schemas/ingredient.schema.js';
     ]),
   ],
   controllers: [IngredientsController],
-  providers: [IngredientService],
-  exports: [IngredientService],
+  providers: [IngredientService, IngredientChangeEmitter],
+  exports: [IngredientService, IngredientChangeEmitter],
 })
 export class IngredientsModule {}

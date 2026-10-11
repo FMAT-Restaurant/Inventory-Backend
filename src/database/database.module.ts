@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { Logger, Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import { Connection } from 'mongoose';
+import type { Connection } from 'mongoose';
 
 @Module({
   imports: [

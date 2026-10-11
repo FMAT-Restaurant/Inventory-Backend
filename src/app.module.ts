@@ -6,6 +6,7 @@ import { IngredientsModule } from './modules/ingredient/ingredient.module.js';
 import { BatchModule } from './modules/batch/batch.module.js';
 import { SuppliersModule } from './modules/suppliers/supplier.module.js';
 import { RecipeModule } from './modules/recipe/recipe.module.js';
+import { TestModule } from './modules/test/test.module.js';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { RecipeModule } from './modules/recipe/recipe.module.js';
     BatchModule,
     SuppliersModule,
     RecipeModule,
+    TestModule,
   ],
   controllers: [AppController],
   providers: [AppService],
