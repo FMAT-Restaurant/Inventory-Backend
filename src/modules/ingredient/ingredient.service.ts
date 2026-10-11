@@ -4,9 +4,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { isValidObjectId, Model } from 'mongoose';
+import { isValidObjectId, Model, Types } from 'mongoose';
 import { Ingredient } from './schemas/ingredient.schema.js';
 import { CreateIngredientDto } from './dto/create-ingredient.dto.js';
+import {
+  INGREDIENT_CHANGED_EVENT,
+  IngredientChangeEmitter,
+} from './ingredient-change.emitter.js';
 
 const DUPLICATE_KEY_ERROR_CODE = 11000;
 
@@ -14,13 +18,19 @@ const DUPLICATE_KEY_ERROR_CODE = 11000;
 export class IngredientService {
   constructor(
     @InjectModel(Ingredient.name) private ingredientModel: Model<Ingredient>,
+    private readonly changeEmitter: IngredientChangeEmitter,
   ) {}
 
   async create(createDto: CreateIngredientDto): Promise<Ingredient> {
     const newIngredient = new this.ingredientModel(createDto);
 
     try {
-      return await newIngredient.save(); // Guarda en MongoDB
+      const saved = await newIngredient.save(); // Guarda en MongoDB
+      this.changeEmitter.emit(INGREDIENT_CHANGED_EVENT, {
+        ingredientId: (saved._id as Types.ObjectId).toString(),
+        action: 'created',
+      });
+      return saved;
     } catch (error) {
       if (this.isDuplicateKeyError(error)) {
         throw new ConflictException(
@@ -65,5 +75,10 @@ export class IngredientService {
     if (result.deletedCount === 0) {
       throw new NotFoundException(`Ingrediente con id '${id}' no encontrado`);
     }
+
+    this.changeEmitter.emit(INGREDIENT_CHANGED_EVENT, {
+      ingredientId: id,
+      action: 'removed',
+    });
   }
 }

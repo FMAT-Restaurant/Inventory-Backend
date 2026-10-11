@@ -6,6 +6,8 @@ import { Types } from 'mongoose';
 import { RecipeService } from './recipe.service.js';
 import { Recipe } from './schemas/recipe.schema.js';
 import { IngredientService } from '../ingredient/ingredient.service.js';
+import { IngredientChangeEmitter } from '../ingredient/ingredient-change.emitter.js';
+import { EventPublisher } from '../../broker/event-publisher.service.js';
 
 describe('RecipeService', () => {
   let service: RecipeService;
@@ -66,6 +68,10 @@ describe('RecipeService', () => {
     findAll: vi.fn(),
   };
 
+  const mockPublisher = {
+    publish: vi.fn(),
+  };
+
   beforeEach(async () => {
     vi.clearAllMocks();
     mockSave.mockResolvedValue({});
@@ -79,6 +85,7 @@ describe('RecipeService', () => {
       ingredient1,
       ingredient2,
     ]);
+    mockPublisher.publish.mockResolvedValue(undefined);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -90,6 +97,14 @@ describe('RecipeService', () => {
         {
           provide: IngredientService,
           useValue: mockIngredientService,
+        },
+        {
+          provide: IngredientChangeEmitter,
+          useValue: new IngredientChangeEmitter(),
+        },
+        {
+          provide: EventPublisher,
+          useValue: mockPublisher,
         },
       ],
     }).compile();
@@ -113,6 +128,16 @@ describe('RecipeService', () => {
       expect(result.recipe.isAvailable).toBe(true);
       expect(result.recipe.maxPreparablePortions).toBe(5); // Botleneck: Pan tiene 5 porciones
       expect(result.recipe.productionCost).toBe(15); // (0.2 * 50) + (1 * 5) = 10 + 5 = 15
+      expect(mockPublisher.publish).toHaveBeenCalledWith(
+        'inventory.topic',
+        'recipe.availability.changed',
+        expect.objectContaining({
+          plateId: 'PLATE-001',
+          isAvailable: true,
+          maxPreparablePortions: 5,
+          productionCost: 15,
+        }),
+      );
     });
 
     it('debería actualizar la receta existente si ya existe el plateId (idempotencia, isNew: false)', async () => {
@@ -268,18 +293,40 @@ describe('RecipeService', () => {
   });
 
   describe('remove', () => {
-    it('debería eliminar una receta existente', async () => {
+    it('debería eliminar una receta existente y publicar disponibilidad false', async () => {
+      const existingRecipe = {
+        _id: new Types.ObjectId(mockRecipeId),
+        plateId: 'PLATE-001',
+        name: 'Hamburguesa',
+        items: [],
+      };
+      mockExecFindById.mockResolvedValue(existingRecipe);
       mockExecDeleteOne.mockResolvedValue({ deletedCount: 1 });
 
       await expect(service.remove(mockRecipeId)).resolves.not.toThrow();
+      expect(MockModel.deleteOne).toHaveBeenCalledWith({
+        _id: existingRecipe._id,
+      });
+      expect(mockPublisher.publish).toHaveBeenCalledWith(
+        'inventory.topic',
+        'recipe.availability.changed',
+        expect.objectContaining({
+          plateId: 'PLATE-001',
+          isAvailable: false,
+          maxPreparablePortions: 0,
+          productionCost: 0,
+        }),
+      );
     });
 
     it('debería lanzar NotFoundException si no existe la receta a eliminar', async () => {
-      mockExecDeleteOne.mockResolvedValue({ deletedCount: 0 });
+      mockExecFindById.mockResolvedValue(null);
+      mockExecFindOne.mockResolvedValue(null);
 
-      await expect(service.remove(mockRecipeId)).rejects.toThrow(
+      await expect(service.remove('NON-EXISTENT')).rejects.toThrow(
         NotFoundException,
       );
+      expect(MockModel.deleteOne).not.toHaveBeenCalled();
     });
   });
 });

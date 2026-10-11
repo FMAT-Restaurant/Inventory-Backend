@@ -4,6 +4,7 @@ import { getModelToken } from '@nestjs/mongoose';
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { IngredientService } from './ingredient.service.js';
 import { Ingredient } from './schemas/ingredient.schema.js';
+import { IngredientChangeEmitter } from './ingredient-change.emitter.js';
 
 describe('IngredientService', () => {
   let service: IngredientService;
@@ -31,6 +32,10 @@ describe('IngredientService', () => {
         {
           provide: getModelToken(Ingredient.name),
           useValue: MockModel,
+        },
+        {
+          provide: IngredientChangeEmitter,
+          useValue: new IngredientChangeEmitter(),
         },
       ],
     }).compile();

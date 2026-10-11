@@ -43,7 +43,7 @@ export class EventPublisher implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    await this.channel.assertExchange(exchange, 'topic', { durable: false });
+    await this.channel.assertExchange(exchange, 'topic', { durable: true });
     const messageBuffer = Buffer.from(JSON.stringify(payload));
 
     this.channel.publish(exchange, routingKey, messageBuffer);
