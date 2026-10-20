@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { RecipeController } from './recipe.controller.js';
 import { RecipeService } from './recipe.service.js';
-import { RecipeEventsService } from './recipe-events.service.js';
+import { RecipeEvents } from './recipe.events.js';
 import { Recipe, RecipeSchema } from './schemas/recipe.schema.js';
 import { IngredientsModule } from '../ingredient/ingredient.module.js';
 import { BrokerModule } from '../../broker/broker.module.js';
@@ -16,7 +16,7 @@ import { BrokerModule } from '../../broker/broker.module.js';
     BrokerModule,
   ],
   controllers: [RecipeController],
-  providers: [RecipeService, RecipeEventsService],
+  providers: [RecipeService, RecipeEvents],
   exports: [RecipeService],
 })
 export class RecipeModule {}

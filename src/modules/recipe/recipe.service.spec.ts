@@ -130,7 +130,7 @@ describe('RecipeService', () => {
       expect(result.recipe.productionCost).toBe(15); // (0.2 * 50) + (1 * 5) = 10 + 5 = 15
       expect(mockPublisher.publish).toHaveBeenCalledWith(
         'inventory.topic',
-        'recipe.availability.changed',
+        'inventory.recipe.availability-changed',
         expect.objectContaining({
           plateId: 'PLATE-001',
           isAvailable: true,
@@ -309,7 +309,7 @@ describe('RecipeService', () => {
       });
       expect(mockPublisher.publish).toHaveBeenCalledWith(
         'inventory.topic',
-        'recipe.availability.changed',
+        'inventory.recipe.availability-changed',
         expect.objectContaining({
           plateId: 'PLATE-001',
           isAvailable: false,

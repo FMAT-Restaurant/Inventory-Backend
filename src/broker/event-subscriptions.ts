@@ -35,6 +35,23 @@ export class EventSubscriptions {
     return this;
   }
 
+  /**
+   * Añade las suscripciones de otro registro, omitiendo las que ya existan.
+   * Se usa para combinar varias suscripciones sobre una misma cola.
+   */
+  merge(other: EventSubscriptions): void {
+    for (const subscription of other.all) {
+      const exists = this.subscriptions.some(
+        (s) =>
+          s.exchange === subscription.exchange &&
+          s.routingKey === subscription.routingKey,
+      );
+      if (!exists) {
+        this.subscriptions.push(subscription);
+      }
+    }
+  }
+
   get all(): EventSubscription[] {
     return [...this.subscriptions];
   }

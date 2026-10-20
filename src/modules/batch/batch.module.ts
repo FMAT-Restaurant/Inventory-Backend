@@ -4,6 +4,8 @@ import { BatchController } from './batch.controller.js';
 import { BatchService } from './batch.service.js';
 import { Batch, BatchSchema } from './schemas/batch.schema.js';
 import { IngredientsModule } from '../ingredient/ingredient.module.js';
+import { BatchEvents } from './batch.events.js';
+import { BrokerModule } from '../../broker/broker.module.js';
 
 @Module({
   imports: [
@@ -11,8 +13,9 @@ import { IngredientsModule } from '../ingredient/ingredient.module.js';
       { name: Batch.name, schema: BatchSchema },
     ]),
     IngredientsModule,
+    BrokerModule,
   ],
   controllers: [BatchController],
-  providers: [BatchService],
+  providers: [BatchService, BatchEvents],
 })
 export class BatchModule {}
