@@ -11,6 +11,7 @@ describe('IngredientService', () => {
 
   const mockExecFind = vi.fn();
   const mockExecFindById = vi.fn();
+  const mockExecFindByIdAndUpdate = vi.fn();
   const mockExecDeleteOne = vi.fn();
   const mockSave = vi.fn();
 
@@ -20,6 +21,7 @@ describe('IngredientService', () => {
   }
   MockModel.find = vi.fn().mockReturnValue({ exec: mockExecFind });
   MockModel.findById = vi.fn().mockReturnValue({ exec: mockExecFindById });
+  MockModel.findByIdAndUpdate = vi.fn().mockReturnValue({ exec: mockExecFindByIdAndUpdate });
   MockModel.deleteOne = vi.fn().mockReturnValue({ exec: mockExecDeleteOne });
 
   beforeEach(async () => {
@@ -88,6 +90,33 @@ describe('IngredientService', () => {
     it('debería lanzar NotFoundException si el ID no es un ObjectId válido', async () => {
       await expect(service.findOne('id-invalido')).rejects.toThrow(NotFoundException);
       expect(MockModel.findById).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateStockAndCost', () => {
+    const validId = '507f1f77bcf86cd799439011';
+
+    it('debería actualizar totalStock y averageCost del ingrediente', async () => {
+      const updatedDoc = { _id: validId, totalStock: 25, averageCost: 18 };
+      mockExecFindByIdAndUpdate.mockResolvedValue(updatedDoc);
+
+      const result = await service.updateStockAndCost(validId, 25, 18);
+      expect(MockModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        validId,
+        { totalStock: 25, averageCost: 18 },
+        { new: true },
+      );
+      expect(result).toEqual(updatedDoc);
+    });
+
+    it('debería lanzar NotFoundException si el ID es inválido o no existe', async () => {
+      await expect(service.updateStockAndCost('invalido', 10)).rejects.toThrow(
+        NotFoundException,
+      );
+      mockExecFindByIdAndUpdate.mockResolvedValue(null);
+      await expect(service.updateStockAndCost(validId, 10)).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 

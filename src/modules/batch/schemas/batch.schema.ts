@@ -9,13 +9,20 @@ export enum BatchStatus {
   DEPLETED = 'depleted',
 }
 
-@Schema({ timestamps: true }) // Añade createdAt y updatedAt
+@Schema({
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true },
+})
 export class Batch extends Document {
   @Prop({ required: true, trim: true, unique: true })
   batchNumber: string;
 
   @Prop({ type: Types.ObjectId, ref: 'Ingredient', required: true })
   ingredientId: Types.ObjectId;
+
+  @Prop({ required: true, min: 0 })
+  initialQuantity: number;
 
   @Prop({ required: true, min: 0 })
   quantity: number;

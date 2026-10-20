@@ -66,6 +66,38 @@ export class IngredientService {
     return ingredient;
   }
 
+  async updateStockAndCost(
+    id: string,
+    totalStock: number,
+    averageCost?: number,
+  ): Promise<Ingredient> {
+    if (!isValidObjectId(id)) {
+      throw new NotFoundException(`Ingrediente con id '${id}' no encontrado`);
+    }
+
+    const updateData: { totalStock: number; averageCost?: number } = {
+      totalStock: Math.max(0, totalStock),
+    };
+    if (averageCost !== undefined) {
+      updateData.averageCost = Math.max(0, averageCost);
+    }
+
+    const updated = await this.ingredientModel
+      .findByIdAndUpdate(id, updateData, { new: true })
+      .exec();
+
+    if (!updated) {
+      throw new NotFoundException(`Ingrediente con id '${id}' no encontrado`);
+    }
+
+    this.changeEmitter.emit(INGREDIENT_CHANGED_EVENT, {
+      ingredientId: id,
+      action: 'created',
+    });
+
+    return updated;
+  }
+
   async remove(id: string): Promise<void> {
     if (!isValidObjectId(id)) {
       throw new NotFoundException(`Ingrediente con id '${id}' no encontrado`);
