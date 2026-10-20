@@ -13,7 +13,10 @@ export class EventConsumer implements OnModuleInit, OnModuleDestroy {
   private connection: amqp.ChannelModel | null = null;
   private channel: amqp.Channel | null = null;
   private initPromise: Promise<void> | null = null;
-  private subscriptionsRegistry: EventSubscriptions | null = null;
+  // Un registro de suscripciones por cola (una cola por dominio suscriptor)
+  private readonly registries = new Map<string, EventSubscriptions>();
+  // Colas que ya tienen su consumidor activo (evita consumidores competidores)
+  private readonly consumingQueues = new Set<string>();
   private brokerUrl: string;
 
   async onModuleInit() {
@@ -101,8 +104,11 @@ export class EventConsumer implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Suscribe el customer a todos los eventos declarados en `subscriptions`
-   * usando una sola cola. Cada mensaje se enruta al handler que coincida
+   * usando la cola indicada. Cada mensaje se enruta al handler que coincida
    * con su routing key (matching topic con '*' y '#').
+   *
+   * Se puede llamar varias veces: cada dominio usa su propia cola y todas
+   * conviven sin pisarse.
    */
   async consumeSubscriptions(
     subscriptions: EventSubscriptions,
@@ -118,22 +124,42 @@ export class EventConsumer implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    // 1. Guardamos el registro y aseguramos la cola del customer
-    // (una sola cola para todas sus suscripciones)
-    this.subscriptionsRegistry = subscriptions;
+    // 1. Aseguramos la cola del dominio
     await this.channel.assertQueue(queueName, { durable: false });
 
-    // 2. Vinculamos la cola a cada exchange + patrón de routing key de interés
+    // 2. Registro previo de esta cola (si ya existe, combinamos)
+    const registry =
+      this.registries.get(queueName) ?? new EventSubscriptions();
+    const existingKeys = new Set(
+      registry.all.map((s) => `${s.exchange}::${s.routingKey}`),
+    );
+
+    // 3. Vinculamos la cola a cada exchange + patrón de routing key nuevo
     for (const { exchange, routingKey } of subscriptions.all) {
       await this.channel.assertExchange(exchange, 'topic', { durable: true });
-      await this.channel.bindQueue(queueName, exchange, routingKey);
 
-      this.logger.log(
-        `📥 [Subscribe] Cola '${queueName}' vinculada a '${exchange}' con patrón '${routingKey}'`,
-      );
+      const key = `${exchange}::${routingKey}`;
+      if (!existingKeys.has(key)) {
+        await this.channel.bindQueue(queueName, exchange, routingKey);
+        this.logger.log(
+          `📥 [Subscribe] Cola '${queueName}' vinculada a '${exchange}' con patrón '${routingKey}'`,
+        );
+      }
     }
 
-    // 3. Un solo consumidor que enruta cada mensaje a su handler
+    // 4. Actualizamos el registro de suscripciones de la cola
+    registry.merge(subscriptions);
+    this.registries.set(queueName, registry);
+
+    // 5. Un solo consumidor por cola (si ya estaba consumiéndose, no repetimos)
+    if (this.consumingQueues.has(queueName)) {
+      this.logger.log(
+        `🔁 [Subscribe] Cola '${queueName}' ya estaba siendo consumida; solo se actualizaron sus suscripciones.`,
+      );
+      return;
+    }
+
+    this.consumingQueues.add(queueName);
     this.channel.consume(
       queueName,
       (msg) => {
@@ -153,18 +179,19 @@ export class EventConsumer implements OnModuleInit, OnModuleDestroy {
           `🎯 [Mensaje Capturado] Routing key: '${routingKey}' -> cola '${queueName}'`,
         );
 
-        void this.dispatch(content, routingKey, msg);
+        void this.dispatch(queueName, content, routingKey, msg);
       },
       { noAck: false },
     );
   }
 
   private async dispatch(
+    queueName: string,
     payload: any,
     routingKey: string,
     msg: amqp.ConsumeMessage,
   ): Promise<void> {
-    const matched = this.subscriptionsRegistry?.matching(routingKey) ?? [];
+    const matched = this.registries.get(queueName)?.matching(routingKey) ?? [];
 
     if (matched.length === 0) {
       this.logger.warn(

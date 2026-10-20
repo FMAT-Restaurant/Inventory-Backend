@@ -72,4 +72,21 @@ describe('EventSubscriptions', () => {
 
     expect(subscriptions.matching('batch.created')).toHaveLength(2);
   });
+
+  it('combina suscripciones con merge() omitiendo duplicados', () => {
+    const base = new EventSubscriptions().on(
+      'inventory.topic',
+      'ingredient.created',
+      () => undefined,
+    );
+
+    const extra = new EventSubscriptions()
+      .on('inventory.topic', 'ingredient.created', () => undefined)
+      .on('inventory.topic', 'batch.created', () => undefined);
+
+    base.merge(extra);
+
+    expect(base.all).toHaveLength(2);
+    expect(base.matching('batch.created')).toHaveLength(1);
+  });
 });
