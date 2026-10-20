@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import {
   ConflictException,
   Injectable,
@@ -5,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model } from 'mongoose';
-import { Batch } from './schemas/batch.schema.js';
+import { Batch, BatchStatus } from './schemas/batch.schema.js';
 import { CreateBatchDto } from './dto/create-batch.dto.js';
 import { UpdateBatchDto } from './dto/update-batch.dto.js';
 import { IngredientService } from '../ingredient/ingredient.service.js';
@@ -21,17 +22,70 @@ export class BatchService {
 
   async create(createDto: CreateBatchDto): Promise<Batch> {
     await this.ingredientService.findOne(createDto.ingredientId);
-    const newBatch = new this.batchModel(createDto);
+
+    const batchNumber =
+      createDto.batchNumber?.trim() || this.generateBatchNumber();
+    const status = this.computeStatus(
+      createDto.quantity,
+      createDto.expirationDate,
+    );
+
+    const newBatch = new this.batchModel({
+      ...createDto,
+      batchNumber,
+      initialQuantity: createDto.quantity,
+      status,
+    });
+
     try {
-      return await newBatch.save();
+      const saved = await newBatch.save();
+      await this.syncIngredientStockAndCost(createDto.ingredientId);
+      return saved;
     } catch (error) {
       if (this.isDuplicateKeyError(error)) {
         throw new ConflictException(
-          `Ya existe un lote con el número '${createDto.batchNumber}'`,
+          `Ya existe un lote con el número '${batchNumber}'`,
         );
       }
       throw error;
     }
+  }
+
+  private generateBatchNumber(): string {
+    const datePart = new Date().toISOString().slice(0, 10).replaceAll('-', '');
+    const suffix = randomBytes(2).toString('hex').toUpperCase();
+    return `LOT-${datePart}-${suffix}`;
+  }
+
+  private computeStatus(
+    quantity: number,
+    expirationDate: Date | string,
+  ): BatchStatus {
+    if (quantity <= 0) {
+      return BatchStatus.DEPLETED;
+    }
+
+    const expDate = new Date(expirationDate);
+    const expDay = Date.UTC(
+      expDate.getUTCFullYear(),
+      expDate.getUTCMonth(),
+      expDate.getUTCDate(),
+    );
+
+    const now = new Date();
+    const today = Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+    );
+
+    if (expDay < today) {
+      return BatchStatus.EXPIRED;
+    }
+    if (expDay === today) {
+      return BatchStatus.EXPIRES_TODAY;
+    }
+    return BatchStatus.ACTIVE;
   }
 
   private isDuplicateKeyError(error: unknown): boolean {
@@ -42,7 +96,13 @@ export class BatchService {
     );
   }
 
-  async findAll(): Promise<Batch[]> {
+  async findAll(ingredientId?: string): Promise<Batch[]> {
+    if (ingredientId) {
+      if (!isValidObjectId(ingredientId)) {
+        return [];
+      }
+      return this.batchModel.find({ ingredientId }).exec();
+    }
     return this.batchModel.find().exec();
   }
 
@@ -60,29 +120,66 @@ export class BatchService {
   }
 
   async update(id: string, updateDto: UpdateBatchDto): Promise<Batch> {
-    if (!isValidObjectId(id)) {
-      throw new NotFoundException(`Lote con id '${id}' no encontrado`);
-    }
+    const currentBatch = await this.findOne(id);
+
+    const nextQuantity = updateDto.quantity ?? currentBatch.quantity;
+    const nextExpirationDate =
+      updateDto.expirationDate ?? currentBatch.expirationDate;
+    const status = this.computeStatus(nextQuantity, nextExpirationDate);
 
     const updatedBatch = await this.batchModel
-      .findByIdAndUpdate(id, updateDto, { new: true })
+      .findByIdAndUpdate(id, { ...updateDto, status }, { new: true })
       .exec();
 
     if (!updatedBatch) {
       throw new NotFoundException(`Lote con id '${id}' no encontrado`);
     }
 
+    await this.syncIngredientStockAndCost(String(currentBatch.ingredientId));
+
     return updatedBatch;
   }
 
   async remove(id: string): Promise<void> {
-    if (!isValidObjectId(id)) {
-      throw new NotFoundException(`Lote con id '${id}' no encontrado`);
-    }
+    const currentBatch = await this.findOne(id);
 
     const result = await this.batchModel.deleteOne({ _id: id }).exec();
     if (result.deletedCount === 0) {
       throw new NotFoundException(`Lote con id '${id}' no encontrado`);
     }
+
+    await this.syncIngredientStockAndCost(String(currentBatch.ingredientId));
+  }
+
+  private async syncIngredientStockAndCost(ingredientId: string): Promise<void> {
+    if (!isValidObjectId(ingredientId)) {
+      return;
+    }
+
+    const batches = await this.batchModel.find({ ingredientId }).exec();
+    const validBatches = batches.filter((b) => {
+      const status = this.computeStatus(b.quantity, b.expirationDate);
+      return (
+        (status === BatchStatus.ACTIVE ||
+          status === BatchStatus.EXPIRES_TODAY) &&
+        b.quantity > 0
+      );
+    });
+
+    const totalStock = validBatches.reduce((sum, b) => sum + b.quantity, 0);
+    const totalValue = validBatches.reduce(
+      (sum, b) => sum + b.quantity * b.cost,
+      0,
+    );
+    const averageCost =
+      totalStock > 0
+        ? Math.round((totalValue / totalStock) * 100) / 100
+        : undefined;
+
+    await this.ingredientService.updateStockAndCost(
+      ingredientId,
+      Math.round(totalStock * 1000) / 1000,
+      averageCost,
+    );
   }
 }

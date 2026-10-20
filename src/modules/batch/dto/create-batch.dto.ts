@@ -1,7 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsDateString,
-  IsEnum,
   IsMongoId,
   IsNotEmpty,
   IsNumber,
@@ -9,13 +8,15 @@ import {
   IsString,
   Min,
 } from 'class-validator';
-import { BatchStatus } from '../schemas/batch.schema.js';
 
 export class CreateBatchDto {
-  @ApiProperty({ description: 'Número de lote único', example: 'LOTE-2023-001' })
+  @ApiPropertyOptional({
+    description: 'Número de lote único (si se omite, se genera automáticamente)',
+    example: 'LOTE-2026-001',
+  })
   @IsString()
-  @IsNotEmpty()
-  batchNumber: string;
+  @IsOptional()
+  batchNumber?: string;
 
   @ApiProperty({ description: 'ID del ingrediente (ObjectId)', example: '60d5ec...' })
   @IsMongoId()
@@ -27,7 +28,7 @@ export class CreateBatchDto {
   @Min(0)
   quantity: number;
 
-  @ApiProperty({ description: 'Fecha de expiración', example: '2024-12-31T23:59:59Z' })
+  @ApiProperty({ description: 'Fecha de expiración', example: '2026-12-31T23:59:59Z' })
   @IsDateString()
   @IsNotEmpty()
   expirationDate: string;
@@ -37,13 +38,8 @@ export class CreateBatchDto {
   @IsOptional()
   supplierId?: string;
 
-  @ApiProperty({ description: 'Costo total o unitario del lote', example: 150.5 })
+  @ApiProperty({ description: 'Costo unitario del lote', example: 150.5 })
   @IsNumber()
   @Min(0)
   cost: number;
-
-  @ApiPropertyOptional({ description: 'Estado del lote', enum: BatchStatus, default: BatchStatus.ACTIVE })
-  @IsEnum(BatchStatus)
-  @IsOptional()
-  status?: BatchStatus;
 }

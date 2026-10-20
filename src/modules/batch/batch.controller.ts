@@ -1,4 +1,13 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiConflictResponse,
@@ -7,6 +16,7 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiParam,
+  ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
 import { BatchService } from './batch.service.js';
@@ -30,9 +40,14 @@ export class BatchController {
 
   @Get()
   @ApiOperation({ summary: 'Obtener la lista completa de lotes' })
+  @ApiQuery({
+    name: 'ingredientId',
+    required: false,
+    description: 'Filtrar lotes por ID de ingrediente',
+  })
   @ApiOkResponse({ description: 'Lista de lotes obtenida con éxito' })
-  findAll() {
-    return this.batchService.findAll();
+  findAll(@Query('ingredientId') ingredientId?: string) {
+    return this.batchService.findAll(ingredientId);
   }
 
   @Get(':id')
