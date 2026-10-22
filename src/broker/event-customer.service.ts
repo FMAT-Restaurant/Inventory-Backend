@@ -32,6 +32,10 @@ export class EventConsumer implements OnModuleInit, OnModuleDestroy {
 
   private async connect() {
     try {
+      if (process.env.RABBITMQ_ENABLED === 'false') {
+        this.logger.warn('RabbitMQ deshabilitado (RABBITMQ_ENABLED=false), omitiendo EventConsumer.');
+        return;
+      }
       this.brokerUrl = resolveBrokerUrl();
 
       this.logger.log(
@@ -56,9 +60,9 @@ export class EventConsumer implements OnModuleInit, OnModuleDestroy {
         '✅ EventConsumer conectado y canal creado exitosamente.',
       );
     } catch (error) {
-      this.logger.error(
-        '❌ Error al conectar el EventConsumer con RabbitMQ:',
-        error,
+      this.logger.warn(
+        '⚠️ No se pudo conectar EventConsumer con RabbitMQ, continuando sin broker:',
+        (error as Error)?.message,
       );
     }
   }

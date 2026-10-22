@@ -13,6 +13,13 @@ export interface BrokerConnection {
   channel: amqp.Channel;
 }
 
+export function isBrokerEnabled(): boolean {
+  if (process.env.RABBITMQ_ENABLED === 'false') return false;
+  if (process.env.RABBITMQ_ENABLED === 'true') return true;
+  // Default to enabled unless explicitly disabled
+  return true;
+}
+
 export function resolveBrokerUrl(): string {
   return process.env.RABBITMQ_URL || DEFAULT_BROKER_URL;
 }
@@ -20,6 +27,9 @@ export function resolveBrokerUrl(): string {
 export async function openBrokerConnection(
   brokerUrl: string = resolveBrokerUrl(),
 ): Promise<BrokerConnection> {
+  if (!isBrokerEnabled()) {
+    throw new Error('RabbitMQ deshabilitado (RABBITMQ_ENABLED=false)');
+  }
   const connection = await amqp.connect(brokerUrl);
   const channel = await connection.createChannel();
   return { connection, channel };

@@ -22,6 +22,10 @@ export class EventPublisher implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     try {
+      if (process.env.RABBITMQ_ENABLED === 'false') {
+        this.logger.warn('RabbitMQ deshabilitado (RABBITMQ_ENABLED=false), omitiendo EventPublisher.');
+        return;
+      }
       this.brokerUrl = resolveBrokerUrl();
       const { connection, channel } = await openBrokerConnection(
         this.brokerUrl,
@@ -41,9 +45,9 @@ export class EventPublisher implements OnModuleInit, OnModuleDestroy {
         '✅ EventPublisher conectado exitosamente al broker de RabbitMQ.',
       );
     } catch (error) {
-      this.logger.error(
-        '❌ Error al conectar el EventPublisher con RabbitMQ:',
-        error,
+      this.logger.warn(
+        '⚠️ No se pudo conectar EventPublisher con RabbitMQ, continuando sin broker:',
+        (error as Error)?.message,
       );
     }
   }
