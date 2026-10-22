@@ -5,6 +5,12 @@ import {
   Logger,
 } from '@nestjs/common';
 import * as amqp from 'amqplib';
+import {
+  attachBrokerListeners,
+  closeBrokerConnection,
+  openBrokerConnection,
+  resolveBrokerUrl,
+} from './broker-connection.js';
 
 @Injectable()
 export class EventPublisher implements OnModuleInit, OnModuleDestroy {
@@ -16,12 +22,21 @@ export class EventPublisher implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     try {
-      this.brokerUrl =
-        process.env.RABBITMQ_URL ||
-        'amqp://admin:supersecurepassword@host.docker.internal:5672';
-      this.connection = await amqp.connect(this.brokerUrl);
-      this.channel = await this.connection.createChannel();
-      this.attachBrokerListeners();
+      this.brokerUrl = resolveBrokerUrl();
+      const { connection, channel } = await openBrokerConnection(
+        this.brokerUrl,
+      );
+      this.connection = connection;
+      this.channel = channel;
+      attachBrokerListeners(
+        'Publisher',
+        this.logger,
+        connection,
+        channel,
+        () => {
+          this.channel = null;
+        },
+      );
       this.logger.log(
         '✅ EventPublisher conectado exitosamente al broker de RabbitMQ.',
       );
@@ -31,28 +46,6 @@ export class EventPublisher implements OnModuleInit, OnModuleDestroy {
         error,
       );
     }
-  }
-
-  private attachBrokerListeners() {
-    // Sin un listener de 'error', amqplib emite un error no capturado y Node
-    // termina el proceso cuando el broker cierra la conexión inesperadamente.
-    this.connection?.on('error', (error) => {
-      this.logger.error(
-        '❌ Error en la conexión de RabbitMQ (Publisher):',
-        error,
-      );
-    });
-    this.connection?.on('close', () => {
-      this.logger.warn('⚠️ Conexión de RabbitMQ cerrada (Publisher).');
-      this.channel = null;
-    });
-    this.channel?.on('error', (error) => {
-      this.logger.error('❌ Error en el canal de RabbitMQ (Publisher):', error);
-    });
-    this.channel?.on('close', () => {
-      this.logger.warn('⚠️ Canal de RabbitMQ cerrado (Publisher).');
-      this.channel = null;
-    });
   }
 
   async publish<T>(
@@ -77,8 +70,7 @@ export class EventPublisher implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy() {
-    await this.channel?.close();
-    await this.connection?.close();
+    await closeBrokerConnection(this.channel, this.connection);
     this.logger.log('🔌 Conexión de EventPublisher cerrada.');
   }
 }
