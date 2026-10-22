@@ -1,4 +1,12 @@
-import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+} from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiConflictResponse,
@@ -11,6 +19,7 @@ import {
 } from '@nestjs/swagger';
 import { IngredientService } from './ingredient.service.js';
 import { CreateIngredientDto } from './dto/create-ingredient.dto.js';
+import { UpdateIngredientDto } from './dto/update-ingredient.dto.js';
 
 @ApiTags('ingredients')
 @Controller('ingredients')
@@ -42,10 +51,28 @@ export class IngredientsController {
     return this.ingredientsService.findOne(id);
   }
 
-  @Delete(':id')
-  @ApiOperation({ summary: 'Eliminar un ingrediente' })
+  @Patch(':id')
+  @ApiOperation({ summary: 'Actualizar un ingrediente' })
   @ApiParam({ name: 'id', description: 'ID único del ingrediente (ObjectId)' })
-  @ApiOkResponse({ description: 'Ingrediente eliminado con éxito' })
+  @ApiOkResponse({ description: 'Ingrediente actualizado con éxito' })
+  @ApiBadRequestResponse({ description: 'Datos de entrada inválidos' })
+  @ApiNotFoundResponse({ description: 'Ingrediente no encontrado' })
+  @ApiConflictResponse({ description: 'Ya existe un ingrediente con ese nombre' })
+  update(
+    @Param('id') id: string,
+    @Body() updateIngredientDto: UpdateIngredientDto,
+  ) {
+    return this.ingredientsService.update(id, updateIngredientDto);
+  }
+
+  @Delete(':id')
+  @ApiOperation({
+    summary: 'Desactivar un ingrediente',
+    description:
+      'Baja lógica: el ingrediente se marca como inactivo y deja de aparecer en el listado.',
+  })
+  @ApiParam({ name: 'id', description: 'ID único del ingrediente (ObjectId)' })
+  @ApiOkResponse({ description: 'Ingrediente desactivado con éxito' })
   @ApiNotFoundResponse({ description: 'Ingrediente no encontrado' })
   remove(@Param('id') id: string) {
     return this.ingredientsService.remove(id);

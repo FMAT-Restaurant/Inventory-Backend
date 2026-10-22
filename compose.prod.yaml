@@ -1,0 +1,34 @@
+# Overlay de produccion. Se combina con el archivo base:
+#
+#   docker compose -f compose.yaml -f compose.prod.yaml up -d --build --wait
+#
+# Diferencias con dev:
+#   - El servicio `app` se conecta a `restaurant-network` (red externa del
+#     API Gateway) con el alias `inventory-backend`, que es como Kong resuelve
+#     http://inventory-backend:8083.
+#   - El puerto 8083 deja de publicarse en el host: el servicio solo es
+#     alcanzable a traves del gateway.
+#   - MongoDB tampoco se publica en el host.
+#
+# Requisito previo (una sola vez por maquina):
+#   docker network create restaurant-network
+services:
+  app:
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+    # `!reset` elimina el publish heredado del archivo base.
+    ports: !reset []
+    networks:
+      inventory-network:
+        aliases:
+          - inventory-backend
+      restaurant-network:
+        aliases:
+          - inventory-backend
+  db:
+    ports: !reset []
+
+networks:
+  restaurant-network:
+    name: restaurant-network
+    external: true

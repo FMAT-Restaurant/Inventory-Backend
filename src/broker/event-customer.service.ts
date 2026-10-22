@@ -6,6 +6,12 @@ import {
 } from '@nestjs/common';
 import * as amqp from 'amqplib';
 import { EventSubscriptions } from './event-subscriptions.js';
+import {
+  attachBrokerListeners,
+  closeBrokerConnection,
+  openBrokerConnection,
+  resolveBrokerUrl,
+} from './broker-connection.js';
 
 @Injectable()
 export class EventConsumer implements OnModuleInit, OnModuleDestroy {
@@ -26,23 +32,37 @@ export class EventConsumer implements OnModuleInit, OnModuleDestroy {
 
   private async connect() {
     try {
-      this.brokerUrl =
-        process.env.RABBITMQ_URL ||
-        'amqp://admin:supersecurepassword@host.docker.internal:5672';
+      if (process.env.RABBITMQ_ENABLED === 'false') {
+        this.logger.warn('RabbitMQ deshabilitado (RABBITMQ_ENABLED=false), omitiendo EventConsumer.');
+        return;
+      }
+      this.brokerUrl = resolveBrokerUrl();
 
       this.logger.log(
         `🔄 Conectando Consumer a RabbitMQ en: ${this.brokerUrl}`,
       );
-      this.connection = await amqp.connect(this.brokerUrl);
-      this.channel = await this.connection.createChannel();
+      const { connection, channel } = await openBrokerConnection(
+        this.brokerUrl,
+      );
+      this.connection = connection;
+      this.channel = channel;
+      attachBrokerListeners(
+        'Consumer',
+        this.logger,
+        connection,
+        channel,
+        () => {
+          this.channel = null;
+        },
+      );
 
       this.logger.log(
         '✅ EventConsumer conectado y canal creado exitosamente.',
       );
     } catch (error) {
-      this.logger.error(
-        '❌ Error al conectar el EventConsumer con RabbitMQ:',
-        error,
+      this.logger.warn(
+        '⚠️ No se pudo conectar EventConsumer con RabbitMQ, continuando sin broker:',
+        (error as Error)?.message,
       );
     }
   }
@@ -77,29 +97,38 @@ export class EventConsumer implements OnModuleInit, OnModuleDestroy {
     );
 
     // 4. Empezamos a consumir los mensajes
-    this.channel.consume(
-      queueName,
-      (msg) => {
-        if (msg && msg.content) {
-          let content: any;
-          try {
-            content = JSON.parse(msg.content.toString());
-          } catch {
-            content = msg.content.toString();
+    this.channel
+      .consume(
+        queueName,
+        (msg) => {
+          if (msg && msg.content) {
+            let content: any;
+            try {
+              content = JSON.parse(msg.content.toString());
+            } catch {
+              content = msg.content.toString();
+            }
+
+            this.logger.log(
+              `🎯 [Mensaje Capturado Bruto] De routing key: ${msg.fields.routingKey}`,
+            );
+
+            onMessageReceived(content, msg.fields.routingKey);
+
+            // Confirmamos que procesamos el mensaje
+            this.channel?.ack(msg);
           }
-
-          this.logger.log(
-            `🎯 [Mensaje Capturado Bruto] De routing key: ${msg.fields.routingKey}`,
-          );
-
-          onMessageReceived(content, msg.fields.routingKey);
-
-          // Confirmamos que procesamos el mensaje
-          this.channel?.ack(msg);
-        }
-      },
-      { noAck: false },
-    );
+        },
+        { noAck: false },
+      )
+      .catch((error) => {
+        // Si el canal se cae mientras espera la respuesta, amqplib rechaza la
+        // promesa y, sin este catch, se reporta como unhandled rejection.
+        this.logger.error(
+          '❌ No se pudo iniciar el consumo de la cola:',
+          error,
+        );
+      });
   }
 
   /**
@@ -160,29 +189,38 @@ export class EventConsumer implements OnModuleInit, OnModuleDestroy {
     }
 
     this.consumingQueues.add(queueName);
-    this.channel.consume(
-      queueName,
-      (msg) => {
-        if (!msg || !msg.content) {
-          return;
-        }
+    this.channel
+      .consume(
+        queueName,
+        (msg) => {
+          if (!msg || !msg.content) {
+            return;
+          }
 
-        const routingKey = msg.fields.routingKey;
-        let content: any;
-        try {
-          content = JSON.parse(msg.content.toString());
-        } catch {
-          content = msg.content.toString();
-        }
+          const routingKey = msg.fields.routingKey;
+          let content: any;
+          try {
+            content = JSON.parse(msg.content.toString());
+          } catch {
+            content = msg.content.toString();
+          }
 
-        this.logger.log(
-          `🎯 [Mensaje Capturado] Routing key: '${routingKey}' -> cola '${queueName}'`,
+          this.logger.log(
+            `🎯 [Mensaje Capturado] Routing key: '${routingKey}' -> cola '${queueName}'`,
+          );
+
+          void this.dispatch(queueName, content, routingKey, msg);
+        },
+        { noAck: false },
+      )
+      .catch((error) => {
+        // Si el canal se cae mientras espera la respuesta, amqplib rechaza la
+        // promesa y, sin este catch, se reporta como unhandled rejection.
+        this.logger.error(
+          `❌ No se pudo iniciar el consumo de la cola '${queueName}':`,
+          error,
         );
-
-        void this.dispatch(queueName, content, routingKey, msg);
-      },
-      { noAck: false },
-    );
+      });
   }
 
   private async dispatch(
@@ -218,8 +256,7 @@ export class EventConsumer implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy() {
-    await this.channel?.close();
-    await this.connection?.close();
+    await closeBrokerConnection(this.channel, this.connection);
     this.logger.log('🔌 Conexión de EventConsumer cerrada.');
   }
 }

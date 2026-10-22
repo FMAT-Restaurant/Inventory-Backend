@@ -9,16 +9,19 @@ describe('IngredientsController', () => {
 
   const mockIngredient = {
     _id: '507f1f77bcf86cd799439011',
+    sku: 'ING-0001',
     name: 'Tomate',
+    category: 'Verduras',
     unit: 'kg',
-    stock: 10,
-    cost: 15,
+    minStock: 10,
+    storageCondition: 'Refrigerado',
   };
 
   const mockIngredientService = {
     create: vi.fn().mockResolvedValue(mockIngredient),
     findAll: vi.fn().mockResolvedValue([mockIngredient]),
     findOne: vi.fn().mockResolvedValue(mockIngredient),
+    update: vi.fn().mockResolvedValue(mockIngredient),
     remove: vi.fn().mockResolvedValue(undefined),
   };
 
@@ -62,10 +65,12 @@ describe('IngredientsController', () => {
   describe('create', () => {
     it('debería crear un nuevo ingrediente', async () => {
       const dto = {
+        sku: 'ING-0001',
         name: 'Tomate',
+        category: 'Verduras',
         unit: 'kg',
         minStock: 10,
-        category: 'Verduras',
+        storageCondition: 'Refrigerado',
       };
       const result = await controller.create(dto);
       expect(service.create).toHaveBeenCalledWith(dto);
@@ -73,8 +78,17 @@ describe('IngredientsController', () => {
     });
   });
 
+  describe('update', () => {
+    it('debería actualizar un ingrediente', async () => {
+      const dto = { name: 'Tomate perita' };
+      const result = await controller.update('507f1f77bcf86cd799439011', dto);
+      expect(service.update).toHaveBeenCalledWith('507f1f77bcf86cd799439011', dto);
+      expect(result).toEqual(mockIngredient);
+    });
+  });
+
   describe('remove', () => {
-    it('debería eliminar un ingrediente', async () => {
+    it('debería desactivar un ingrediente', async () => {
       const result = await controller.remove('507f1f77bcf86cd799439011');
       expect(service.remove).toHaveBeenCalledWith('507f1f77bcf86cd799439011');
       expect(result).toBeUndefined();

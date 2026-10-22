@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Types } from 'mongoose';
+import { Document, Schema as MongooseSchema, Types } from 'mongoose';
 
 export enum EstadoUmbral {
   OPTIMO = 'OPTIMO',
@@ -14,7 +14,16 @@ export enum EstadoUmbral {
 })
 export class Ingredient extends Document {
   @Prop({ required: true, trim: true, unique: true })
+  sku: string; // Ej: 'ING-0001', 'ING-0002'
+
+  @Prop({ required: true, trim: true, unique: true })
   name: string;
+
+  @Prop({ required: false, trim: true })
+  description?: string;
+
+  @Prop({ required: true, trim: true })
+  category: string;
 
   @Prop({ required: true })
   unit: string; // Ej: 'kg', 'g', 'ml', 'pza'
@@ -22,13 +31,22 @@ export class Ingredient extends Document {
   @Prop({ required: true, default: 0, min: 0 })
   minStock: number;
 
+  @Prop({ required: true, default: false })
+  isPerishable: boolean;
+
+  @Prop({ required: true, trim: true })
+  storageCondition: string; // Ej: 'Refrigerado', 'Congelado', 'Ambiente'
+
   @Prop({ required: true, default: 0, min: 0 })
   averageCost: number;
 
-  @Prop({ required: true, trim: true })
-  category: string;
-
-  @Prop({ type: Types.ObjectId, ref: 'Supplier', default: null })
+  // El tipo del schema (no el de BSON) es el que permite castear el string
+  // a ObjectId y que el virtual 'supplierSugested' pueda poblarse.
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'Supplier',
+    default: null,
+  })
   supplierIdSugested: Types.ObjectId | null;
 
   @Prop({ required: true, default: 0, min: 0 })
@@ -36,6 +54,10 @@ export class Ingredient extends Document {
 
   @Prop({ required: true, default: 0, min: 0 })
   totalStock: number;
+
+  // Baja lógica: el DELETE marca el ingrediente como inactivo en vez de borrarlo.
+  @Prop({ required: true, default: true })
+  isActive: boolean;
 
   declare supplierSugested?: Record<string, unknown> | null;
 
@@ -45,6 +67,8 @@ export class Ingredient extends Document {
 }
 
 export const IngredientSchema = SchemaFactory.createForClass(Ingredient);
+
+IngredientSchema.index({ isActive: 1 });
 
 IngredientSchema.virtual('supplierSugested', {
   ref: 'Supplier',

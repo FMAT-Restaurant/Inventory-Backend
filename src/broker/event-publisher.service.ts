@@ -5,6 +5,12 @@ import {
   Logger,
 } from '@nestjs/common';
 import * as amqp from 'amqplib';
+import {
+  attachBrokerListeners,
+  closeBrokerConnection,
+  openBrokerConnection,
+  resolveBrokerUrl,
+} from './broker-connection.js';
 
 @Injectable()
 export class EventPublisher implements OnModuleInit, OnModuleDestroy {
@@ -16,18 +22,32 @@ export class EventPublisher implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     try {
-      this.brokerUrl =
-        process.env.RABBITMQ_URL ||
-        'amqp://admin:supersecurepassword@host.docker.internal:5672';
-      this.connection = await amqp.connect(this.brokerUrl);
-      this.channel = await this.connection.createChannel();
+      if (process.env.RABBITMQ_ENABLED === 'false') {
+        this.logger.warn('RabbitMQ deshabilitado (RABBITMQ_ENABLED=false), omitiendo EventPublisher.');
+        return;
+      }
+      this.brokerUrl = resolveBrokerUrl();
+      const { connection, channel } = await openBrokerConnection(
+        this.brokerUrl,
+      );
+      this.connection = connection;
+      this.channel = channel;
+      attachBrokerListeners(
+        'Publisher',
+        this.logger,
+        connection,
+        channel,
+        () => {
+          this.channel = null;
+        },
+      );
       this.logger.log(
         '✅ EventPublisher conectado exitosamente al broker de RabbitMQ.',
       );
     } catch (error) {
-      this.logger.error(
-        '❌ Error al conectar el EventPublisher con RabbitMQ:',
-        error,
+      this.logger.warn(
+        '⚠️ No se pudo conectar EventPublisher con RabbitMQ, continuando sin broker:',
+        (error as Error)?.message,
       );
     }
   }
@@ -54,8 +74,7 @@ export class EventPublisher implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy() {
-    await this.channel?.close();
-    await this.connection?.close();
+    await closeBrokerConnection(this.channel, this.connection);
     this.logger.log('🔌 Conexión de EventPublisher cerrada.');
   }
 }

@@ -16,6 +16,12 @@ import type { Connection } from 'mongoose';
         return {
           uri,
           lazyConnection: true,
+          // Ante un reinicio del contenedor de MongoDB la conexión queda en
+          // estado fallido; sin reintentos el servicio responde 500 hasta que
+          // se reinicia a mano.
+          retryAttempts: 10,
+          retryDelay: 3000,
+          serverSelectionTimeoutMS: 15000,
           connectionFactory: (connection: Connection) => {
             connection.on('connected', () => {
               logger.log('Conexion con MongoDB verificada');
