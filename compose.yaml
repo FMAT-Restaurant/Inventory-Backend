@@ -1,13 +1,33 @@
+# Configuracion base = ambiente de desarrollo (dev).
+#
+# En dev el servicio `app` NO se conecta a `restaurant-network` (la red del
+# API Gateway): se publica en el host y se accede a el en
+# http://localhost:8083. El gateway no debe enrutar trafico a tu maquina.
+#
+# En produccion se usa el overlay `compose.prod.yaml`, que agrega la red del
+# gateway y deja de publicar los puertos en el host:
+#
+#   docker compose -f compose.yaml -f compose.prod.yaml up -d --build --wait
+#
+# Las redes `inventory-network` (interna) y `restaurant-network` (externa) se
+# declaran en los archivos segun el ambiente.
 services:
   app:
     build: .
     environment:
       MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME:?Define MONGO_INITDB_ROOT_USERNAME en .env}:${MONGO_INITDB_ROOT_PASSWORD:?Define MONGO_INITDB_ROOT_PASSWORD en .env}@db:27017/${MONGO_INITDB_DATABASE:?Define MONGO_INITDB_DATABASE en .env}?authSource=admin
-      PORT: 3000
+      PORT: 8083
+      NODE_ENV: ${NODE_ENV:-development}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
       RABBITMQ_URL: ${RABBITMQ_URL:?Define RABBITMQ_URL en .env}
+    # Solo en dev se publica el puerto en el host. El puerto interno del
+    # contenedor es 8083 en todos los ambientes: es el que espera el gateway.
     ports:
-      - '3000:3000'
+      - '${APP_HOST_PORT:-8083}:8083'
+    networks:
+      inventory-network:
+        aliases:
+          - inventory-backend
     depends_on:
       db:
         condition: service_healthy
@@ -17,7 +37,7 @@ services:
           'CMD',
           'node',
           '-e',
-          "fetch('http://127.0.0.1:3000/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+          "fetch('http://127.0.0.1:8083/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
         ]
       interval: 5s
       timeout: 5s
@@ -30,9 +50,11 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:?Define MONGO_INITDB_ROOT_PASSWORD en .env}
       MONGO_INITDB_DATABASE: ${MONGO_INITDB_DATABASE:?Define MONGO_INITDB_DATABASE en .env}
     ports:
-      - '27017:27017'
+      - '${MONGO_HOST_PORT:-27017}:27017'
     volumes:
       - mongo_data:/data/db
+    networks:
+      - inventory-network
     healthcheck:
       test: ['CMD', 'mongosh', '--eval', "db.adminCommand('ping')"]
       interval: 5s
@@ -41,3 +63,8 @@ services:
 
 volumes:
   mongo_data:
+
+networks:
+  # Red interna del proyecto: conecta `app` con `db`.
+  inventory-network:
+    driver: bridge

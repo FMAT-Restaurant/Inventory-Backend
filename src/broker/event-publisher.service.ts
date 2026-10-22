@@ -21,6 +21,7 @@ export class EventPublisher implements OnModuleInit, OnModuleDestroy {
         'amqp://admin:supersecurepassword@host.docker.internal:5672';
       this.connection = await amqp.connect(this.brokerUrl);
       this.channel = await this.connection.createChannel();
+      this.attachBrokerListeners();
       this.logger.log(
         '✅ EventPublisher conectado exitosamente al broker de RabbitMQ.',
       );
@@ -30,6 +31,28 @@ export class EventPublisher implements OnModuleInit, OnModuleDestroy {
         error,
       );
     }
+  }
+
+  private attachBrokerListeners() {
+    // Sin un listener de 'error', amqplib emite un error no capturado y Node
+    // termina el proceso cuando el broker cierra la conexión inesperadamente.
+    this.connection?.on('error', (error) => {
+      this.logger.error(
+        '❌ Error en la conexión de RabbitMQ (Publisher):',
+        error,
+      );
+    });
+    this.connection?.on('close', () => {
+      this.logger.warn('⚠️ Conexión de RabbitMQ cerrada (Publisher).');
+      this.channel = null;
+    });
+    this.channel?.on('error', (error) => {
+      this.logger.error('❌ Error en el canal de RabbitMQ (Publisher):', error);
+    });
+    this.channel?.on('close', () => {
+      this.logger.warn('⚠️ Canal de RabbitMQ cerrado (Publisher).');
+      this.channel = null;
+    });
   }
 
   async publish<T>(

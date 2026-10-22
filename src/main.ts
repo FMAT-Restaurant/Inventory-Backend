@@ -6,6 +6,16 @@ import { AppModule } from './app.module.js';
 import { createOpenApiConfig } from './openapi.config.js';
 
 async function bootstrap() {
+  // Red de seguridad: sin estos listeners, un 'error' emitido por un
+  // EventEmitter sin manejar (p. ej. amqplib al caerse el broker) termina el
+  // proceso Node y deja el servicio sin responder.
+  process.on('uncaughtException', (error) => {
+    console.error('UNCAUGHT EXCEPTION:', error);
+  });
+  process.on('unhandledRejection', (reason) => {
+    console.error('UNHANDLED REJECTION:', reason);
+  });
+
   const app = await NestFactory.create(AppModule);
   const frontendOrigins = (process.env.FRONTEND_URL ?? '')
     .split(',')

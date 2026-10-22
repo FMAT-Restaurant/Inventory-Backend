@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 
 export const INGREDIENT_CHANGED_EVENT = 'ingredient.changed';
 
-export type IngredientChangeAction = 'created' | 'removed';
+export type IngredientChangeAction = 'created' | 'updated' | 'removed';
 
 export interface IngredientChangedEvent {
   ingredientId: string;

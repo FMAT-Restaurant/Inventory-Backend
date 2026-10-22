@@ -21,7 +21,7 @@ Backend de inventario con NestJS, Mongoose y MongoDB. Esta guía permite prepara
    docker compose up -d --build --wait
    ```
 
-5. Abre <http://localhost:3000/>. Debes ver `Hello World!`. La documentación de la API está en <http://localhost:3000/api>. Consulta el estado con `docker compose ps`: tanto `app` como `db` deben aparecer como `healthy`.
+5. Abre <http://localhost:8083/>. Debes ver `Hello World!`. La documentación de la API está en <http://localhost:8083/api>. Consulta el estado con `docker compose ps`: tanto `app` como `db` deben aparecer como `healthy`.
 
 Cuando termines, ejecuta `docker compose down`. Esto detiene los contenedores sin borrar el volumen de datos.
 
@@ -45,7 +45,7 @@ El proyecto ofrece la infraestructura inicial. Aún no hay modelos de inventario
 - Git, para clonar el repositorio y utilizar los hooks.
 - Node.js y npm, para desarrollar fuera del contenedor. La versión del proyecto está fijada en `.nvmrc` (`22.23.3`).
 - Docker con Compose. En macOS puedes utilizar Docker Desktop u OrbStack y mantener su motor ejecutándose.
-- Puertos `3000` y `27017` disponibles en tu computadora.
+- Puertos `8083` (app en Docker) y `27017` (MongoDB) disponibles en tu computadora.
 
 Comprueba las herramientas antes de continuar:
 
@@ -87,15 +87,19 @@ MONGO_INITDB_ROOT_PASSWORD=inventory_dev
 MONGO_INITDB_DATABASE=inventory
 MONGODB_URI=mongodb://inventory:inventory_dev@localhost:27017/inventory?authSource=admin
 PORT=3000
+APP_HOST_PORT=8083
+NODE_ENV=development
 ```
 
-| Variable                     | Para qué sirve                                               |
-| ---------------------------- | ------------------------------------------------------------ |
-| `MONGO_INITDB_ROOT_USERNAME` | Usuario administrador que MongoDB crea al iniciar volumen.  |
-| `MONGO_INITDB_ROOT_PASSWORD` | Contraseña de ese usuario.                                   |
-| `MONGO_INITDB_DATABASE`      | Base de datos inicial.                                       |
-| `MONGODB_URI`                | Dirección de conexión de Mongoose al trabajar localmente.   |
-| `PORT`                       | Puerto de NestJS al trabajar localmente.                     |
+| Variable                     | Para qué sirve                                                        |
+| ---------------------------- | --------------------------------------------------------------------- |
+| `MONGO_INITDB_ROOT_USERNAME` | Usuario administrador que MongoDB crea al iniciar volumen.           |
+| `MONGO_INITDB_ROOT_PASSWORD` | Contraseña de ese usuario.                                            |
+| `MONGO_INITDB_DATABASE`      | Base de datos inicial.                                                |
+| `MONGODB_URI`                | Dirección de conexión de Mongoose al trabajar localmente.            |
+| `PORT`                       | Puerto de NestJS al trabajar localmente.                              |
+| `APP_HOST_PORT`              | Puerto del host donde se publica la app en Docker (solo en dev).      |
+| `NODE_ENV`                   | Ambiente de ejecución: `development`, `qa` o `production`.            |
 
 Son valores de ejemplo para desarrollo. Cada integrante puede usar los mismos: tendrá una base de datos independiente en su computadora.
 
@@ -128,10 +132,38 @@ docker compose up
 La conexión dentro de Docker es:
 
 ```text
-Navegador → localhost:3000 → app (NestJS + Mongoose) → db:27017 (MongoDB)
+Navegador → localhost:8083 → app (NestJS + Mongoose) → db:27017 (MongoDB)
 ```
 
-Abre `http://localhost:3000/`. El endpoint inicial responde `Hello World!`.
+Abre `http://localhost:8083/`. El endpoint inicial responde `Hello World!`.
+
+### Ambientes: dev y producción
+
+El archivo `compose.yaml` es la base del ambiente de **desarrollo**. El ambiente de **producción** se completa con el overlay `compose.prod.yaml`, que se combina con la base.
+
+| | dev (base) | producción (overlay) |
+| --- | --- | --- |
+| Comando | `docker compose up -d --build --wait` | `docker compose -f compose.yaml -f compose.prod.yaml up -d --build --wait` |
+| Acceso | `http://localhost:8083` | Solo por el API Gateway (`http://localhost:8000/api/v1/inventory`) |
+| Puerto en el host | `8083` publicado | Ninguno: `!reset` elimina el `publish` heredado |
+| Red del gateway | No se conecta | Se conecta a `restaurant-network` con el alias `inventory-backend` |
+| `NODE_ENV` | `development` | `production` |
+
+En **dev** el contenedor no entra a `restaurant-network`, la red compartida con el API Gateway. Así tu máquina no intercepta el tráfico que Kong envía a `inventory-backend` y no necesitas que esa red exista para trabajar.
+
+En **producción** el contenedor se une a `restaurant-network` con el alias `inventory-backend`, que es como Kong resuelve `http://inventory-backend:8083`. El puerto `8083` sigue siendo el puerto interno del contenedor en ambos ambientes: cambia quién lo consume, no el puerto en sí.
+
+Antes de levantar producción, crea la red externa una sola vez por máquina:
+
+```bash
+docker network create restaurant-network
+```
+
+Para no escribir los dos archivos cada vez, define `COMPOSE_FILE` en el `.env` del servidor:
+
+```dotenv
+COMPOSE_FILE=compose.yaml:compose.prod.yaml
+```
 
 ### Cómo está configurado Docker Compose
 
@@ -139,17 +171,19 @@ Abre `http://localhost:3000/`. El endpoint inicial responde `Hello World!`.
 
 - Usa la imagen `mongo:7.0`.
 - Lee las credenciales de `.env` mediante la interpolación de Compose.
-- Publica MongoDB en el puerto `27017` de tu computadora.
+- Publica MongoDB en el puerto `27017` de tu computadora (en producción no se publica).
 - Guarda los datos en el volumen `mongo_data`, montado en `/data/db`.
 - Su `healthcheck` ejecuta `mongosh --eval "db.adminCommand('ping')"`.
+- Vive en la red interna `inventory-network`, compartida solo con `app`.
 
 **Servicio `app`:**
 
 - Construye la imagen usando el `Dockerfile` del proyecto.
-- Publica NestJS en el puerto `3000`.
-- Recibe `PORT=3000` y una `MONGODB_URI` construida con las credenciales y el host `db`.
+- Publica NestJS en el puerto `8083` del host en dev; en producción no publica puertos.
+- Recibe `PORT=8083` y una `MONGODB_URI` construida con las credenciales y el host `db`.
 - Espera a que `db` esté sano mediante `depends_on` y `condition: service_healthy`.
-- Su `healthcheck` comprueba que el endpoint inicial responda correctamente por HTTP.
+- Su `healthcheck` comprueba que el endpoint inicial responda correctamente por HTTP en el puerto `8083`.
+- Comparte la red interna `inventory-network` con `db` y, en producción, también `restaurant-network` con el alias `inventory-backend`.
 
 Dentro del contenedor, `localhost` corresponde al propio contenedor. Por eso la app utiliza `db`, el nombre del servicio de MongoDB.
 
@@ -167,7 +201,7 @@ Dentro del contenedor, `localhost` corresponde al propio contenedor. Por eso la 
 
 ## 5. Cómo desarrollar con NestJS local y MongoDB en Docker
 
-Si la app de Docker está ejecutándose, detén solo esa app para liberar el puerto `3000`:
+Si la app de Docker está ejecutándose, detén solo esa app para liberar el puerto `8083`:
 
 ```bash
 docker compose stop app
@@ -210,7 +244,7 @@ Al iniciar la app y conectarse con MongoDB, muestra:
 
 ## 7. Documentación OpenAPI
 
-Con la aplicación encendida, abre <http://localhost:3000/api> para ver y probar los endpoints en Swagger UI. El documento JSON está en <http://localhost:3000/api-json>. Actualmente describe el endpoint inicial `GET /`; al agregar endpoints se incluirán en el documento generado por NestJS.
+Con la aplicación encendida, abre <http://localhost:8083/api> para ver y probar los endpoints en Swagger UI. El documento JSON está en <http://localhost:8083/api-json>. Si ejecutas NestJS en tu computadora (sin Docker), usa el puerto `3000`. Actualmente describe el endpoint inicial `GET /`; al agregar endpoints se incluirán en el documento generado por NestJS.
 
 Para generar el archivo YAML que se adjuntará a un release:
 
@@ -309,10 +343,18 @@ npm run test:e2e
 docker compose ps
 docker compose logs app
 docker compose logs db
-curl http://localhost:3000/
+curl http://localhost:8083/
 ```
 
 Ambos servicios deben aparecer como `healthy`. Los logs de la app deben mostrar la confirmación de la conexión (`Conexion con MongoDB verificada`), y la solicitud HTTP debe responder `Hello World!`.
+
+Para comprobar que en dev el contenedor **no** está en la red del gateway:
+
+```bash
+docker inspect inventory-backend-app-1 --format '{{json .NetworkSettings.Networks}}'
+```
+
+El resultado solo debe incluir `inventory-backend_inventory-network`.
 
 ### Ejecutar consultas en MongoDB
 
@@ -349,10 +391,13 @@ Las variables `MONGO_INITDB_*` inicializan MongoDB cuando su volumen está vací
 | Problema                              | Qué revisar                                                                                              |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | Docker no conecta con su motor        | Abre Docker Desktop u OrbStack e inicia el motor correspondiente.                                        |
-| Puerto `3000` ocupado                 | Detén la app local u otro proceso en el puerto 3000 antes de arrancar Docker.                            |
+| Puerto `8083` ocupado                 | Detén la app local u otro proceso en el puerto 8083 antes de arrancar Docker.                            |
 | Puerto `27017` ocupado                | Revisa si ya tienes otro MongoDB o contenedor utilizando ese puerto.                                     |
 | Falta una variable                    | Copia `.env.example` a `.env` si aún no existe y revisa sus valores.                                     |
 | Mongoose rechaza la conexión          | Comprueba que el servicio `db` esté sano y que las credenciales y host sean correctos.                   |
+| El gateway devuelve `503`             | El contenedor no está en `restaurant-network` o el alias no coincide: revisa `docker exec fmat-api-gateway getent hosts inventory-backend`. |
+| `network restaurant-network not found` | La red externa no existe en esa máquina: `docker network create restaurant-network`.                    |
+| El contenedor aparece `unhealthy`      | El `healthcheck` sondea el puerto interno `8083`; revisa que `PORT=8083` siga llegando al contenedor.     |
 | Cambié la contraseña y no funciona    | El volumen puede conservar la contraseña anterior; borrar el volumen o recrearlo si estás en desarrollo.|
 | No se ven cambios de código en Docker | Reconstruye la imagen con `docker compose up --build`.                                                   |
 | El commit se rechaza                  | Revisa la salida del lint o el formato del mensaje.                                                      |
