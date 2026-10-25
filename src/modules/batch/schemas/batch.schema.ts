@@ -15,7 +15,7 @@ export enum BatchStatus {
   toObject: { virtuals: true },
 })
 export class Batch extends Document {
-  @Prop({ required: true, trim: true, unique: true })
+  @Prop({ required: true, trim: true, uppercase: true })
   batchNumber: string;
 
   @Prop({ type: Types.ObjectId, ref: 'Ingredient', required: true })
@@ -41,3 +41,5 @@ export class Batch extends Document {
 }
 
 export const BatchSchema = SchemaFactory.createForClass(Batch);
+
+BatchSchema.index({ ingredientId: 1, batchNumber: 1 }, { unique: true });

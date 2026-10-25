@@ -6,15 +6,18 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  MaxLength,
   Min,
 } from 'class-validator';
 
 export class CreateBatchDto {
   @ApiPropertyOptional({
-    description: 'Número de lote único (si se omite, se genera automáticamente)',
+    description:
+      'Número de lote (se combina con el SKU del ingrediente; si se omite, se genera automáticamente)',
     example: 'LOTE-2026-001',
   })
   @IsString()
+  @MaxLength(60)
   @IsOptional()
   batchNumber?: string;
 

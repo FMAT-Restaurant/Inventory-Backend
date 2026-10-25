@@ -161,6 +161,25 @@ describe('BatchService', () => {
       expect(result.batchNumber).toMatch(/^LOT-\d{8}-[A-F0-9]{4}$/);
     });
 
+    it('debería combinar el SKU del ingrediente con el número de lote manual y autogenerado', async () => {
+      vi.spyOn(ingredientService, 'findOne').mockResolvedValueOnce({
+        _id: mockIngredientId,
+        sku: 'ING-0001',
+      } as never);
+
+      const manualResult = await service.create(mockCreateDto);
+      expect(manualResult.batchNumber).toBe('ING-0001-LOTE-1');
+
+      vi.spyOn(ingredientService, 'findOne').mockResolvedValueOnce({
+        _id: mockIngredientId,
+        sku: 'ING-0001',
+      } as never);
+
+      const { batchNumber: _ignored, ...dtoWithoutNumber } = mockCreateDto;
+      const autoResult = await service.create(dtoWithoutNumber);
+      expect(autoResult.batchNumber).toMatch(/^ING-0001-LOT-\d{8}-[A-F0-9]{4}$/);
+    });
+
     it.each([
       ['depleted cuando quantity es 0', { ...mockCreateDto, quantity: 0 }, BatchStatus.DEPLETED],
       ['expired cuando la fecha ya pasó', { ...mockCreateDto, expirationDate: '2020-01-01' }, BatchStatus.EXPIRED],
