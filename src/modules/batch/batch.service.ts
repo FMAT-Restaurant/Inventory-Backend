@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model } from 'mongoose';
@@ -14,17 +15,29 @@ import { IngredientService } from '../ingredient/ingredient.service.js';
 const DUPLICATE_KEY_ERROR_CODE = 11000;
 
 @Injectable()
-export class BatchService {
+export class BatchService implements OnModuleInit {
   constructor(
     @InjectModel(Batch.name) private batchModel: Model<Batch>,
     private readonly ingredientService: IngredientService,
   ) {}
 
-  async create(createDto: CreateBatchDto): Promise<Batch> {
-    await this.ingredientService.findOne(createDto.ingredientId);
+  async onModuleInit(): Promise<void> {
+    try {
+      await this.batchModel.collection?.dropIndex('batchNumber_1');
+    } catch {
+      // El índice global legado ya no existe; no se requiere acción.
+    }
+  }
 
-    const batchNumber =
-      createDto.batchNumber?.trim() || this.generateBatchNumber();
+  async create(createDto: CreateBatchDto): Promise<Batch> {
+    const ingredient = await this.ingredientService.findOne(
+      createDto.ingredientId,
+    );
+
+    const batchNumber = this.buildBatchNumber(
+      createDto.batchNumber,
+      ingredient?.sku,
+    );
     const status = this.computeStatus(
       createDto.quantity,
       createDto.expirationDate,
@@ -44,17 +57,33 @@ export class BatchService {
     } catch (error) {
       if (this.isDuplicateKeyError(error)) {
         throw new ConflictException(
-          `Ya existe un lote con el número '${batchNumber}'`,
+          `Ya existe un lote con el número '${batchNumber}' para este ingrediente`,
         );
       }
       throw error;
     }
   }
 
-  private generateBatchNumber(): string {
+  private buildBatchNumber(rawBatchNumber?: string, sku?: string): string {
+    const normalizedSku = sku?.trim().toUpperCase();
+    const trimmedBatch = rawBatchNumber?.trim().toUpperCase();
+
+    if (!trimmedBatch) {
+      return this.generateBatchNumber(normalizedSku);
+    }
+
+    if (normalizedSku && !trimmedBatch.startsWith(`${normalizedSku}-`)) {
+      return `${normalizedSku}-${trimmedBatch}`;
+    }
+
+    return trimmedBatch;
+  }
+
+  private generateBatchNumber(sku?: string): string {
     const datePart = new Date().toISOString().slice(0, 10).replaceAll('-', '');
     const suffix = randomBytes(2).toString('hex').toUpperCase();
-    return `LOT-${datePart}-${suffix}`;
+    const baseCode = `LOT-${datePart}-${suffix}`;
+    return sku ? `${sku}-${baseCode}` : baseCode;
   }
 
   private computeStatus(
