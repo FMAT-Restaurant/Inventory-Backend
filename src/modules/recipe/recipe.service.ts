@@ -8,13 +8,13 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model, Types } from 'mongoose';
-import { Ingredient } from '../ingredient/schemas/ingredient.schema.js';
-import { IngredientService } from '../ingredient/ingredient.service.js';
+import { Item } from '../item/schemas/item.schema.js';
+import { ItemService } from '../item/item.service.js';
 import {
-  INGREDIENT_CHANGED_EVENT,
-  IngredientChangeEmitter,
-  IngredientChangedEvent,
-} from '../ingredient/ingredient-change.emitter.js';
+  ITEM_CHANGED_EVENT,
+  ItemChangeEmitter,
+  ItemChangedEvent,
+} from '../item/item-change.emitter.js';
 import { EventPublisher } from '../../broker/event-publisher.service.js';
 import {
   INVENTORY_EXCHANGE,
@@ -38,38 +38,30 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     @InjectModel(Recipe.name) private readonly recipeModel: Model<Recipe>,
-    private readonly ingredientService: IngredientService,
-    private readonly ingredientChangeEmitter: IngredientChangeEmitter,
+    private readonly itemService: ItemService,
+    private readonly itemChangeEmitter: ItemChangeEmitter,
     private readonly publisher: EventPublisher,
   ) {}
 
   async onModuleInit(): Promise<void> {
-    // Cuando cambia un ingrediente, recalculamos y publicamos la
+    // Cuando cambia un item, recalculamos y publicamos la
     // disponibilidad de las recetas que lo usan
-    this.ingredientChangeEmitter.on(
-      INGREDIENT_CHANGED_EVENT,
-      this.handleIngredientChanged,
-    );
+    this.itemChangeEmitter.on(ITEM_CHANGED_EVENT, this.handleItemChanged);
   }
 
   onModuleDestroy(): void {
-    this.ingredientChangeEmitter.off(
-      INGREDIENT_CHANGED_EVENT,
-      this.handleIngredientChanged,
-    );
+    this.itemChangeEmitter.off(ITEM_CHANGED_EVENT, this.handleItemChanged);
   }
 
-  private readonly handleIngredientChanged = (
-    event: IngredientChangedEvent,
-  ): void => {
-    void this.publishAvailabilityForIngredient(event);
+  private readonly handleItemChanged = (event: ItemChangedEvent): void => {
+    void this.publishAvailabilityForItem(event);
   };
 
   async registerOrUpdate(
     createDto: CreateRecipeDto,
   ): Promise<{ recipe: RecipeResponseDto; isNew: boolean }> {
-    const ingredientMap = await this.validateAndFetchIngredients(
-      createDto.items.map((i) => i.ingredientId),
+    const itemMap = await this.validateAndFetchItems(
+      createDto.items.map((i) => i.itemId),
     );
 
     let recipe = await this.recipeModel
@@ -80,7 +72,7 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
     if (recipe) {
       recipe.name = createDto.name;
       recipe.items = createDto.items.map((item) => ({
-        ingredientId: new Types.ObjectId(item.ingredientId),
+        itemId: new Types.ObjectId(item.itemId),
         requiredQuantity: item.requiredQuantity,
       })) as any;
       await recipe.save();
@@ -91,7 +83,7 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
           plateId: createDto.plateId,
           name: createDto.name,
           items: createDto.items.map((item) => ({
-            ingredientId: new Types.ObjectId(item.ingredientId),
+            itemId: new Types.ObjectId(item.itemId),
             requiredQuantity: item.requiredQuantity,
           })),
         });
@@ -106,7 +98,7 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    const response = this.buildResponseDto(recipe, ingredientMap);
+    const response = this.buildResponseDto(recipe, itemMap);
     await this.publishAvailabilityChanged(response);
 
     return {
@@ -116,17 +108,17 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
   }
 
   async findAll(query?: QueryRecipesDto): Promise<RecipeResponseDto[]> {
-    const [recipes, allIngredients] = await Promise.all([
+    const [recipes, allItems] = await Promise.all([
       this.recipeModel.find().exec(),
-      this.ingredientService.findAll(),
+      this.itemService.findAll(),
     ]);
 
-    const ingredientMap = new Map<string, Ingredient>(
-      allIngredients.map((ing) => [(ing._id as Types.ObjectId).toString(), ing]),
+    const itemMap = new Map<string, Item>(
+      allItems.map((item) => [(item._id as Types.ObjectId).toString(), item]),
     );
 
     let result = recipes.map((recipe) =>
-      this.buildResponseDto(recipe, ingredientMap),
+      this.buildResponseDto(recipe, itemMap),
     );
 
     if (query?.available !== undefined) {
@@ -138,15 +130,10 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
 
   async findOne(idOrPlateId: string): Promise<RecipeResponseDto> {
     const recipe = await this.findEntityByIdOrPlateId(idOrPlateId);
-    const ingredientIds = recipe.items.map((item) =>
-      item.ingredientId.toString(),
-    );
-    const ingredientMap = await this.validateAndFetchIngredients(
-      ingredientIds,
-      false,
-    );
+    const itemIds = recipe.items.map((item) => item.itemId.toString());
+    const itemMap = await this.validateAndFetchItems(itemIds, false);
 
-    return this.buildResponseDto(recipe, ingredientMap);
+    return this.buildResponseDto(recipe, itemMap);
   }
 
   async update(
@@ -156,11 +143,9 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
     const recipe = await this.findEntityByIdOrPlateId(idOrPlateId);
 
     if (updateDto.items && updateDto.items.length > 0) {
-      await this.validateAndFetchIngredients(
-        updateDto.items.map((i) => i.ingredientId),
-      );
+      await this.validateAndFetchItems(updateDto.items.map((i) => i.itemId));
       recipe.items = updateDto.items.map((item) => ({
-        ingredientId: new Types.ObjectId(item.ingredientId),
+        itemId: new Types.ObjectId(item.itemId),
         requiredQuantity: item.requiredQuantity,
       })) as any;
     }
@@ -169,7 +154,10 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
       recipe.name = updateDto.name;
     }
 
-    if (updateDto.plateId !== undefined && updateDto.plateId !== recipe.plateId) {
+    if (
+      updateDto.plateId !== undefined &&
+      updateDto.plateId !== recipe.plateId
+    ) {
       const existingPlate = await this.recipeModel
         .findOne({ plateId: updateDto.plateId })
         .exec();
@@ -183,15 +171,10 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
 
     await recipe.save();
 
-    const ingredientIds = recipe.items.map((item) =>
-      item.ingredientId.toString(),
-    );
-    const ingredientMap = await this.validateAndFetchIngredients(
-      ingredientIds,
-      false,
-    );
+    const itemIds = recipe.items.map((item) => item.itemId.toString());
+    const itemMap = await this.validateAndFetchItems(itemIds, false);
 
-    const response = this.buildResponseDto(recipe, ingredientMap);
+    const response = this.buildResponseDto(recipe, itemMap);
     await this.publishAvailabilityChanged(response);
 
     return response;
@@ -200,9 +183,7 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
   async remove(idOrPlateId: string): Promise<void> {
     const recipe = await this.findEntityByIdOrPlateId(idOrPlateId);
 
-    const result = await this.recipeModel
-      .deleteOne({ _id: recipe._id })
-      .exec();
+    const result = await this.recipeModel.deleteOne({ _id: recipe._id }).exec();
     if (result.deletedCount === 0) {
       throw new NotFoundException(
         `Receta con identificador '${idOrPlateId}' no encontrada`,
@@ -222,7 +203,11 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
   private async publishAvailabilityChanged(
     data: Pick<
       RecipeAvailabilityChangedEvent,
-      'plateId' | 'name' | 'isAvailable' | 'maxPreparablePortions' | 'productionCost'
+      | 'plateId'
+      | 'name'
+      | 'isAvailable'
+      | 'maxPreparablePortions'
+      | 'productionCost'
     >,
   ): Promise<void> {
     const event: RecipeAvailabilityChangedEvent = {
@@ -244,29 +229,24 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async publishAvailabilityForIngredient(
-    event: IngredientChangedEvent,
+  private async publishAvailabilityForItem(
+    event: ItemChangedEvent,
   ): Promise<void> {
     try {
       const recipes = await this.recipeModel
-        .find({ 'items.ingredientId': new Types.ObjectId(event.ingredientId) })
+        .find({ 'items.itemId': new Types.ObjectId(event.itemId) })
         .exec();
 
       for (const recipe of recipes) {
-        const ingredientIds = recipe.items.map((item) =>
-          item.ingredientId.toString(),
-        );
-        const ingredientMap = await this.validateAndFetchIngredients(
-          ingredientIds,
-          false,
-        );
+        const itemIds = recipe.items.map((item) => item.itemId.toString());
+        const itemMap = await this.validateAndFetchItems(itemIds, false);
         await this.publishAvailabilityChanged(
-          this.buildResponseDto(recipe, ingredientMap),
+          this.buildResponseDto(recipe, itemMap),
         );
       }
     } catch (error) {
       this.logger.error(
-        `Error al recalcular disponibilidad tras '${event.action}' del ingrediente '${event.ingredientId}':`,
+        `Error al recalcular disponibilidad tras '${event.action}' del item '${event.itemId}':`,
         error,
       );
     }
@@ -279,9 +259,7 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (!recipe) {
-      recipe = await this.recipeModel
-        .findOne({ plateId: idOrPlateId })
-        .exec();
+      recipe = await this.recipeModel.findOne({ plateId: idOrPlateId }).exec();
     }
 
     if (!recipe) {
@@ -293,21 +271,21 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
     return recipe;
   }
 
-  private async validateAndFetchIngredients(
-    ingredientIds: string[],
+  private async validateAndFetchItems(
+    itemIds: string[],
     failOnMissing = true,
-  ): Promise<Map<string, Ingredient>> {
-    const map = new Map<string, Ingredient>();
-    const uniqueIds = Array.from(new Set(ingredientIds));
+  ): Promise<Map<string, Item>> {
+    const map = new Map<string, Item>();
+    const uniqueIds = Array.from(new Set(itemIds));
 
     for (const id of uniqueIds) {
       try {
-        const ingredient = await this.ingredientService.findOne(id);
-        map.set(id, ingredient);
+        const item = await this.itemService.findOne(id);
+        map.set(id, item);
       } catch {
         if (failOnMissing) {
           throw new NotFoundException(
-            `Ingrediente con id '${id}' no encontrado en el catálogo de inventario`,
+            `Item con id '${id}' no encontrado en el catálogo de inventario`,
           );
         }
       }
@@ -318,17 +296,17 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
 
   private buildResponseDto(
     recipe: Recipe,
-    ingredientMap: Map<string, Ingredient>,
+    itemMap: Map<string, Item>,
   ): RecipeResponseDto {
     let isAvailable = recipe.items.length > 0;
     let maxPortions = recipe.items.length > 0 ? Infinity : 0;
     let productionCost = 0;
 
     const itemDetails: RecipeItemDetailResponseDto[] = recipe.items.map(
-      (item) => {
-        const ingId = item.ingredientId.toString();
-        const ingredient = ingredientMap.get(ingId);
-        const ingInfo = ingredient as unknown as
+      (recipeItem) => {
+        const itemId = recipeItem.itemId.toString();
+        const item = itemMap.get(itemId);
+        const itemInfo = item as unknown as
           | {
               availableStock?: number;
               totalStock?: number;
@@ -338,35 +316,35 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
             }
           | undefined;
         const stock =
-          ingInfo?.availableStock ??
-          ingInfo?.totalStock ??
-          ingInfo?.stock ??
+          itemInfo?.availableStock ??
+          itemInfo?.totalStock ??
+          itemInfo?.stock ??
           0;
-        const cost = ingInfo?.averageCost ?? ingInfo?.cost ?? 0;
-        const name = ingredient?.name ?? 'Desconocido';
-        const unit = ingredient?.unit ?? '';
-        const hasSufficient = stock >= item.requiredQuantity;
+        const cost = itemInfo?.averageCost ?? itemInfo?.cost ?? 0;
+        const name = item?.name ?? 'Desconocido';
+        const unit = item?.unit ?? '';
+        const hasSufficient = stock >= recipeItem.requiredQuantity;
 
         if (!hasSufficient) {
           isAvailable = false;
         }
 
         const itemPortions =
-          item.requiredQuantity > 0
-            ? Math.floor(stock / item.requiredQuantity)
+          recipeItem.requiredQuantity > 0
+            ? Math.floor(stock / recipeItem.requiredQuantity)
             : 0;
         if (itemPortions < maxPortions) {
           maxPortions = itemPortions;
         }
 
-        const itemCost = item.requiredQuantity * cost;
+        const itemCost = recipeItem.requiredQuantity * cost;
         productionCost += itemCost;
 
         return {
-          ingredientId: ingId,
-          ingredientName: name,
+          itemId,
+          itemName: name,
           unit,
-          requiredQuantity: item.requiredQuantity,
+          requiredQuantity: recipeItem.requiredQuantity,
           availableStock: stock,
           hasSufficientStock: hasSufficient,
         };

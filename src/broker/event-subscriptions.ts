@@ -12,7 +12,7 @@ export interface EventSubscription {
  * Indica qué eventos le interesan y qué hacer cuando llega cada uno:
  *
  *   const subscriptions = new EventSubscriptions()
- *     .on('inventory.topic', 'ingredient.created', (payload) => {...})
+ *     .on('inventory.topic', 'item.created', (payload) => {...})
  *     .on('inventory.topic', 'batch.#', (payload) => {...});
  *
  *   await consumer.consumeSubscriptions(subscriptions, 'cola_inventory');

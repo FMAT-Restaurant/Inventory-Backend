@@ -32,7 +32,7 @@ export class BatchController {
   @ApiOperation({ summary: 'Crear un nuevo lote' })
   @ApiCreatedResponse({ description: 'Lote creado con éxito' })
   @ApiBadRequestResponse({ description: 'Datos de entrada inválidos' })
-  @ApiNotFoundResponse({ description: 'Ingrediente referenciado no encontrado' })
+  @ApiNotFoundResponse({ description: 'Item referenciado no encontrado' })
   @ApiConflictResponse({ description: 'Ya existe un lote con ese número' })
   create(@Body() createBatchDto: CreateBatchDto) {
     return this.batchService.create(createBatchDto);
@@ -41,13 +41,13 @@ export class BatchController {
   @Get()
   @ApiOperation({ summary: 'Obtener la lista completa de lotes' })
   @ApiQuery({
-    name: 'ingredientId',
+    name: 'itemId',
     required: false,
-    description: 'Filtrar lotes por ID de ingrediente',
+    description: 'Filtrar lotes por ID de item',
   })
   @ApiOkResponse({ description: 'Lista de lotes obtenida con éxito' })
-  findAll(@Query('ingredientId') ingredientId?: string) {
-    return this.batchService.findAll(ingredientId);
+  findAll(@Query('itemId') itemId?: string) {
+    return this.batchService.findAll(itemId);
   }
 
   @Get(':id')

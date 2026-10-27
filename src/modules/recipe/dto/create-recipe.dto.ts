@@ -27,7 +27,7 @@ export class CreateRecipeDto {
   name: string;
 
   @ApiProperty({
-    description: 'Lista de ingredientes e insumos necesarios para la receta',
+    description: 'Lista de items e insumos necesarios para la receta',
     type: [CreateRecipeItemDto],
   })
   @IsArray()

@@ -3,8 +3,8 @@ import { Document, Types } from 'mongoose';
 
 @Schema({ _id: false })
 export class RecipeItem {
-  @Prop({ type: Types.ObjectId, ref: 'Ingredient', required: true })
-  ingredientId: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: 'Item', required: true })
+  itemId: Types.ObjectId;
 
   @Prop({ required: true, min: 0.0001 })
   requiredQuantity: number;

@@ -4,11 +4,11 @@ import { getModelToken } from '@nestjs/mongoose';
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { BatchService } from './batch.service.js';
 import { Batch, BatchStatus } from './schemas/batch.schema.js';
-import { IngredientService } from '../ingredient/ingredient.service.js';
+import { ItemService } from '../item/item.service.js';
 
 describe('BatchService', () => {
   let service: BatchService;
-  let ingredientService: IngredientService;
+  let itemService: ItemService;
 
   const mockExecFind = vi.fn();
   const mockExecFindById = vi.fn();
@@ -17,12 +17,12 @@ describe('BatchService', () => {
   const mockSave = vi.fn();
 
   const mockBatchId = '507f1f77bcf86cd799439011';
-  const mockIngredientId = '60d5ec9af682fbd39a1b865b';
+  const mockItemId = '60d5ec9af682fbd39a1b865b';
   const futureExpirationDate = '2099-12-31';
 
   const mockCreateDto = {
     batchNumber: 'LOTE-1',
-    ingredientId: mockIngredientId,
+    itemId: mockItemId,
     quantity: 10,
     cost: 15,
     expirationDate: futureExpirationDate,
@@ -31,7 +31,7 @@ describe('BatchService', () => {
   const mockBatch = {
     _id: mockBatchId,
     batchNumber: 'LOTE-1',
-    ingredientId: mockIngredientId,
+    itemId: mockItemId,
     initialQuantity: 10,
     quantity: 10,
     cost: 15,
@@ -39,18 +39,23 @@ describe('BatchService', () => {
     status: BatchStatus.ACTIVE,
   };
 
-  function MockModel(this: Record<string, unknown>, dto: Record<string, unknown>) {
+  function MockModel(
+    this: Record<string, unknown>,
+    dto: Record<string, unknown>,
+  ) {
     Object.assign(this, dto);
     this.save = () => mockSave(this);
   }
   MockModel.find = vi.fn().mockReturnValue({ exec: mockExecFind });
   MockModel.findById = vi.fn().mockReturnValue({ exec: mockExecFindById });
-  MockModel.findByIdAndUpdate = vi.fn().mockReturnValue({ exec: mockExecFindByIdAndUpdate });
+  MockModel.findByIdAndUpdate = vi
+    .fn()
+    .mockReturnValue({ exec: mockExecFindByIdAndUpdate });
   MockModel.deleteOne = vi.fn().mockReturnValue({ exec: mockExecDeleteOne });
 
-  const mockIngredientService = {
-    findOne: vi.fn().mockResolvedValue({ _id: mockIngredientId }),
-    updateStockAndCost: vi.fn().mockResolvedValue({ _id: mockIngredientId }),
+  const mockItemService = {
+    findOne: vi.fn().mockResolvedValue({ _id: mockItemId }),
+    updateStockAndCost: vi.fn().mockResolvedValue({ _id: mockItemId }),
   };
 
   beforeEach(async () => {
@@ -69,14 +74,14 @@ describe('BatchService', () => {
           useValue: MockModel,
         },
         {
-          provide: IngredientService,
-          useValue: mockIngredientService,
+          provide: ItemService,
+          useValue: mockItemService,
         },
       ],
     }).compile();
 
     service = module.get<BatchService>(BatchService);
-    ingredientService = module.get<IngredientService>(IngredientService);
+    itemService = module.get<ItemService>(ItemService);
   });
 
   it('debería estar definido', () => {
@@ -90,13 +95,13 @@ describe('BatchService', () => {
       expect(result).toEqual([mockBatch]);
     });
 
-    it('debería filtrar por ingredientId cuando es válido', async () => {
-      const result = await service.findAll(mockIngredientId);
-      expect(MockModel.find).toHaveBeenCalledWith({ ingredientId: mockIngredientId });
+    it('debería filtrar por itemId cuando es válido', async () => {
+      const result = await service.findAll(mockItemId);
+      expect(MockModel.find).toHaveBeenCalledWith({ itemId: mockItemId });
       expect(result).toEqual([mockBatch]);
     });
 
-    it('debería retornar arreglo vacío si ingredientId no es ObjectId válido', async () => {
+    it('debería retornar arreglo vacío si itemId no es ObjectId válido', async () => {
       const result = await service.findAll('invalido');
       expect(MockModel.find).not.toHaveBeenCalled();
       expect(result).toEqual([]);
@@ -114,30 +119,38 @@ describe('BatchService', () => {
 
     it('debería lanzar NotFoundException si no existe el lote', async () => {
       mockExecFindById.mockResolvedValue(null);
-      await expect(service.findOne(mockBatchId)).rejects.toThrow(NotFoundException);
+      await expect(service.findOne(mockBatchId)).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('debería lanzar NotFoundException si el ID no es un ObjectId válido', async () => {
-      await expect(service.findOne('id-invalido')).rejects.toThrow(NotFoundException);
+      await expect(service.findOne('id-invalido')).rejects.toThrow(
+        NotFoundException,
+      );
       expect(MockModel.findById).not.toHaveBeenCalled();
     });
   });
 
   describe('create', () => {
-    it('debería validar el ingrediente y sincronizar su stock al crear un lote', async () => {
-      const findOneSpy = vi.spyOn(ingredientService, 'findOne');
-      const syncSpy = vi.spyOn(ingredientService, 'updateStockAndCost');
+    it('debería validar el item y sincronizar su stock al crear un lote', async () => {
+      const findOneSpy = vi.spyOn(itemService, 'findOne');
+      const syncSpy = vi.spyOn(itemService, 'updateStockAndCost');
 
       await service.create(mockCreateDto);
 
-      expect(findOneSpy).toHaveBeenCalledWith(mockIngredientId);
-      expect(syncSpy).toHaveBeenCalledWith(mockIngredientId, 10, 15);
+      expect(findOneSpy).toHaveBeenCalledWith(mockItemId);
+      expect(syncSpy).toHaveBeenCalledWith(mockItemId, 10, 15);
     });
 
-    it('debería lanzar NotFoundException si el ingrediente no existe', async () => {
-      vi.spyOn(ingredientService, 'findOne').mockRejectedValueOnce(new NotFoundException());
+    it('debería lanzar NotFoundException si el item no existe', async () => {
+      vi.spyOn(itemService, 'findOne').mockRejectedValueOnce(
+        new NotFoundException(),
+      );
 
-      await expect(service.create(mockCreateDto)).rejects.toThrow(NotFoundException);
+      await expect(service.create(mockCreateDto)).rejects.toThrow(
+        NotFoundException,
+      );
       expect(mockSave).not.toHaveBeenCalled();
     });
 
@@ -161,31 +174,44 @@ describe('BatchService', () => {
       expect(result.batchNumber).toMatch(/^LOT-\d{8}-[A-F0-9]{4}$/);
     });
 
-    it('debería combinar el SKU del ingrediente con el número de lote manual y autogenerado', async () => {
-      vi.spyOn(ingredientService, 'findOne').mockResolvedValueOnce({
-        _id: mockIngredientId,
+    it('debería combinar el SKU del item con el número de lote manual y autogenerado', async () => {
+      vi.spyOn(itemService, 'findOne').mockResolvedValueOnce({
+        _id: mockItemId,
         sku: 'ING-0001',
       } as never);
 
       const manualResult = await service.create(mockCreateDto);
       expect(manualResult.batchNumber).toBe('ING-0001-LOTE-1');
 
-      vi.spyOn(ingredientService, 'findOne').mockResolvedValueOnce({
-        _id: mockIngredientId,
+      vi.spyOn(itemService, 'findOne').mockResolvedValueOnce({
+        _id: mockItemId,
         sku: 'ING-0001',
       } as never);
 
       const { batchNumber: _ignored, ...dtoWithoutNumber } = mockCreateDto;
       const autoResult = await service.create(dtoWithoutNumber);
-      expect(autoResult.batchNumber).toMatch(/^ING-0001-LOT-\d{8}-[A-F0-9]{4}$/);
+      expect(autoResult.batchNumber).toMatch(
+        /^ING-0001-LOT-\d{8}-[A-F0-9]{4}$/,
+      );
     });
 
     it.each([
-      ['depleted cuando quantity es 0', { ...mockCreateDto, quantity: 0 }, BatchStatus.DEPLETED],
-      ['expired cuando la fecha ya pasó', { ...mockCreateDto, expirationDate: '2020-01-01' }, BatchStatus.EXPIRED],
+      [
+        'depleted cuando quantity es 0',
+        { ...mockCreateDto, quantity: 0 },
+        BatchStatus.DEPLETED,
+      ],
+      [
+        'expired cuando la fecha ya pasó',
+        { ...mockCreateDto, expirationDate: '2020-01-01' },
+        BatchStatus.EXPIRED,
+      ],
       [
         'expires_today cuando vence hoy',
-        { ...mockCreateDto, expirationDate: new Date().toISOString().slice(0, 10) },
+        {
+          ...mockCreateDto,
+          expirationDate: new Date().toISOString().slice(0, 10),
+        },
         BatchStatus.EXPIRES_TODAY,
       ],
     ])('debería asignar status %s', async (_label, dto, expectedStatus) => {
@@ -194,18 +220,27 @@ describe('BatchService', () => {
     });
 
     it('debería lanzar ConflictException si el numero de lote ya existe', async () => {
-      const duplicateKeyError = Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
+      const duplicateKeyError = Object.assign(
+        new Error('E11000 duplicate key'),
+        { code: 11000 },
+      );
       mockSave.mockRejectedValueOnce(duplicateKeyError);
 
-      await expect(service.create(mockCreateDto)).rejects.toThrow(ConflictException);
+      await expect(service.create(mockCreateDto)).rejects.toThrow(
+        ConflictException,
+      );
     });
   });
 
   describe('update', () => {
     const updateDto = { quantity: 50 };
-    const updatedBatch = { ...mockBatch, ...updateDto, status: BatchStatus.ACTIVE };
+    const updatedBatch = {
+      ...mockBatch,
+      ...updateDto,
+      status: BatchStatus.ACTIVE,
+    };
 
-    it('debería actualizar un lote, recalcular su status y sincronizar el ingrediente', async () => {
+    it('debería actualizar un lote, recalcular su status y sincronizar el item', async () => {
       mockExecFindById.mockResolvedValue(mockBatch);
       mockExecFindByIdAndUpdate.mockResolvedValue(updatedBatch);
 
@@ -215,29 +250,33 @@ describe('BatchService', () => {
         { ...updateDto, status: BatchStatus.ACTIVE },
         { new: true },
       );
-      expect(ingredientService.updateStockAndCost).toHaveBeenCalled();
+      expect(itemService.updateStockAndCost).toHaveBeenCalled();
       expect(result).toEqual(updatedBatch);
     });
 
     it('debería lanzar NotFoundException si el lote no existe', async () => {
       mockExecFindById.mockResolvedValue(null);
-      await expect(service.update(mockBatchId, updateDto)).rejects.toThrow(NotFoundException);
+      await expect(service.update(mockBatchId, updateDto)).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 
   describe('remove', () => {
-    it('debería eliminar un lote y sincronizar el ingrediente', async () => {
+    it('debería eliminar un lote y sincronizar el item', async () => {
       mockExecFindById.mockResolvedValue(mockBatch);
       mockExecDeleteOne.mockResolvedValue({ deletedCount: 1 });
       await service.remove(mockBatchId);
       expect(MockModel.deleteOne).toHaveBeenCalledWith({ _id: mockBatchId });
-      expect(ingredientService.updateStockAndCost).toHaveBeenCalled();
+      expect(itemService.updateStockAndCost).toHaveBeenCalled();
     });
 
     it('debería lanzar NotFoundException si el lote no existe', async () => {
       mockExecFindById.mockResolvedValue(mockBatch);
       mockExecDeleteOne.mockResolvedValue({ deletedCount: 0 });
-      await expect(service.remove(mockBatchId)).rejects.toThrow(NotFoundException);
+      await expect(service.remove(mockBatchId)).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 });

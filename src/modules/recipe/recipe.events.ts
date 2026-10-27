@@ -62,8 +62,7 @@ export class RecipeEvents implements OnModuleInit {
     }
 
     try {
-      const { recipe, isNew } =
-        await this.recipeService.registerOrUpdate(dto);
+      const { recipe, isNew } = await this.recipeService.registerOrUpdate(dto);
       this.logger.log(
         `🍽️ Receta ${isNew ? 'registrada' : 'actualizada'} para plateId '${recipe.plateId}' desde '${MenuRoutingKeys.PlateCreated}'`,
       );
@@ -91,7 +90,7 @@ export class RecipeEvents implements OnModuleInit {
     dto.plateId = payload.plateId;
     dto.name = payload.name;
     dto.items = items.map((item) => ({
-      ingredientId: item.ingredientId,
+      itemId: item.itemId,
       requiredQuantity: item.requiredQuantity,
     }));
 

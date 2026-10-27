@@ -4,15 +4,13 @@ import { RecipeController } from './recipe.controller.js';
 import { RecipeService } from './recipe.service.js';
 import { RecipeEvents } from './recipe.events.js';
 import { Recipe, RecipeSchema } from './schemas/recipe.schema.js';
-import { IngredientsModule } from '../ingredient/ingredient.module.js';
+import { ItemsModule } from '../item/item.module.js';
 import { BrokerModule } from '../../broker/broker.module.js';
 
 @Module({
   imports: [
-    MongooseModule.forFeature([
-      { name: Recipe.name, schema: RecipeSchema },
-    ]),
-    IngredientsModule,
+    MongooseModule.forFeature([{ name: Recipe.name, schema: RecipeSchema }]),
+    ItemsModule,
     BrokerModule,
   ],
   controllers: [RecipeController],

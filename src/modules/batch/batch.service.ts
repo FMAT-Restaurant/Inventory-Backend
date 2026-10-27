@@ -10,7 +10,7 @@ import { isValidObjectId, Model } from 'mongoose';
 import { Batch, BatchStatus } from './schemas/batch.schema.js';
 import { CreateBatchDto } from './dto/create-batch.dto.js';
 import { UpdateBatchDto } from './dto/update-batch.dto.js';
-import { IngredientService } from '../ingredient/ingredient.service.js';
+import { ItemService } from '../item/item.service.js';
 
 const DUPLICATE_KEY_ERROR_CODE = 11000;
 
@@ -18,7 +18,7 @@ const DUPLICATE_KEY_ERROR_CODE = 11000;
 export class BatchService implements OnModuleInit {
   constructor(
     @InjectModel(Batch.name) private batchModel: Model<Batch>,
-    private readonly ingredientService: IngredientService,
+    private readonly itemService: ItemService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -30,14 +30,9 @@ export class BatchService implements OnModuleInit {
   }
 
   async create(createDto: CreateBatchDto): Promise<Batch> {
-    const ingredient = await this.ingredientService.findOne(
-      createDto.ingredientId,
-    );
+    const item = await this.itemService.findOne(createDto.itemId);
 
-    const batchNumber = this.buildBatchNumber(
-      createDto.batchNumber,
-      ingredient?.sku,
-    );
+    const batchNumber = this.buildBatchNumber(createDto.batchNumber, item?.sku);
     const status = this.computeStatus(
       createDto.quantity,
       createDto.expirationDate,
@@ -52,12 +47,12 @@ export class BatchService implements OnModuleInit {
 
     try {
       const saved = await newBatch.save();
-      await this.syncIngredientStockAndCost(createDto.ingredientId);
+      await this.syncItemStockAndCost(createDto.itemId);
       return saved;
     } catch (error) {
       if (this.isDuplicateKeyError(error)) {
         throw new ConflictException(
-          `Ya existe un lote con el número '${batchNumber}' para este ingrediente`,
+          `Ya existe un lote con el número '${batchNumber}' para este item`,
         );
       }
       throw error;
@@ -125,12 +120,12 @@ export class BatchService implements OnModuleInit {
     );
   }
 
-  async findAll(ingredientId?: string): Promise<Batch[]> {
-    if (ingredientId) {
-      if (!isValidObjectId(ingredientId)) {
+  async findAll(itemId?: string): Promise<Batch[]> {
+    if (itemId) {
+      if (!isValidObjectId(itemId)) {
         return [];
       }
-      return this.batchModel.find({ ingredientId }).exec();
+      return this.batchModel.find({ itemId }).exec();
     }
     return this.batchModel.find().exec();
   }
@@ -164,7 +159,7 @@ export class BatchService implements OnModuleInit {
       throw new NotFoundException(`Lote con id '${id}' no encontrado`);
     }
 
-    await this.syncIngredientStockAndCost(String(currentBatch.ingredientId));
+    await this.syncItemStockAndCost(String(currentBatch.itemId));
 
     return updatedBatch;
   }
@@ -177,15 +172,15 @@ export class BatchService implements OnModuleInit {
       throw new NotFoundException(`Lote con id '${id}' no encontrado`);
     }
 
-    await this.syncIngredientStockAndCost(String(currentBatch.ingredientId));
+    await this.syncItemStockAndCost(String(currentBatch.itemId));
   }
 
-  private async syncIngredientStockAndCost(ingredientId: string): Promise<void> {
-    if (!isValidObjectId(ingredientId)) {
+  private async syncItemStockAndCost(itemId: string): Promise<void> {
+    if (!isValidObjectId(itemId)) {
       return;
     }
 
-    const batches = await this.batchModel.find({ ingredientId }).exec();
+    const batches = await this.batchModel.find({ itemId }).exec();
     const validBatches = batches.filter((b) => {
       const status = this.computeStatus(b.quantity, b.expirationDate);
       return (
@@ -205,8 +200,8 @@ export class BatchService implements OnModuleInit {
         ? Math.round((totalValue / totalStock) * 100) / 100
         : undefined;
 
-    await this.ingredientService.updateStockAndCost(
-      ingredientId,
+    await this.itemService.updateStockAndCost(
+      itemId,
       Math.round(totalStock * 1000) / 1000,
       averageCost,
     );

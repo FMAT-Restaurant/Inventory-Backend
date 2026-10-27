@@ -18,8 +18,8 @@ export class Batch extends Document {
   @Prop({ required: true, trim: true, uppercase: true })
   batchNumber: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'Ingredient', required: true })
-  ingredientId: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: 'Item', required: true })
+  itemId: Types.ObjectId;
 
   @Prop({ required: true, min: 0 })
   initialQuantity: number;
@@ -36,10 +36,15 @@ export class Batch extends Document {
   @Prop({ required: true, min: 0 })
   cost: number;
 
-  @Prop({ required: true, type: String, enum: BatchStatus, default: BatchStatus.ACTIVE })
+  @Prop({
+    required: true,
+    type: String,
+    enum: BatchStatus,
+    default: BatchStatus.ACTIVE,
+  })
   status: BatchStatus;
 }
 
 export const BatchSchema = SchemaFactory.createForClass(Batch);
 
-BatchSchema.index({ ingredientId: 1, batchNumber: 1 }, { unique: true });
+BatchSchema.index({ itemId: 1, batchNumber: 1 }, { unique: true });

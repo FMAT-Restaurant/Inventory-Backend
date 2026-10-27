@@ -9,22 +9,22 @@ import {
   Min,
 } from 'class-validator';
 
-export class CreateIngredientDto {
+export class CreateItemDto {
   @ApiProperty({
-    description: 'Código SKU del ingrediente',
+    description: 'Código SKU del item',
     example: 'ING-0001',
   })
   @IsString()
   @IsNotEmpty()
   sku: string;
 
-  @ApiProperty({ description: 'Nombre del ingrediente', example: 'Tomate' })
+  @ApiProperty({ description: 'Nombre del item', example: 'Tomate' })
   @IsString()
   @IsNotEmpty()
   name: string;
 
   @ApiPropertyOptional({
-    description: 'Descripción del ingrediente',
+    description: 'Descripción del item',
     example: 'Tomate perita para salsas',
   })
   @IsString()
@@ -32,7 +32,7 @@ export class CreateIngredientDto {
   description?: string;
 
   @ApiProperty({
-    description: 'Categoría del ingrediente',
+    description: 'Categoría del item',
     example: 'Verduras',
   })
   @IsString()
@@ -50,7 +50,7 @@ export class CreateIngredientDto {
   minStock: number;
 
   @ApiPropertyOptional({
-    description: 'Indica si el ingrediente es perecedero',
+    description: 'Indica si el item es perecedero',
     example: true,
   })
   @IsBoolean()

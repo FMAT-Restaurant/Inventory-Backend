@@ -56,21 +56,21 @@ describe('RecipeEvents', () => {
     await created({
       plateId: 'P-1',
       name: 'Hamburguesa',
-      items: [{ ingredientId: 'I-1', requiredQuantity: 2 }],
+      items: [{ itemId: 'I-1', requiredQuantity: 2 }],
       timestamp: '2026-10-22T00:00:00Z',
     });
 
     expect(registerOrUpdate).toHaveBeenCalledWith({
       plateId: 'P-1',
       name: 'Hamburguesa',
-      items: [{ ingredientId: 'I-1', requiredQuantity: 2 }],
+      items: [{ itemId: 'I-1', requiredQuantity: 2 }],
     });
   });
 
   it.each([
     {},
-    { name: 'Platillo', items: [{ ingredientId: 'I-1' }] },
-    { plateId: 'P-1', items: [{ ingredientId: 'I-1' }] },
+    { name: 'Platillo', items: [{ itemId: 'I-1' }] },
+    { plateId: 'P-1', items: [{ itemId: 'I-1' }] },
     { plateId: 'P-1', name: 'Platillo', items: [] },
     { plateId: 'P-1', name: 'Platillo', items: 'no es arreglo' },
   ])('ignora un evento de creación incompleto: %j', async (payload) => {
@@ -96,15 +96,13 @@ describe('RecipeEvents', () => {
   });
 
   it('maneja el fallo al registrar una receta sin propagarlo', async () => {
-    registerOrUpdate.mockRejectedValueOnce(
-      new Error('Ingrediente inexistente'),
-    );
+    registerOrUpdate.mockRejectedValueOnce(new Error('Item inexistente'));
     const { subscriptions } = await subscribe();
     await expect(
       subscriptions.matching('menu.plate.created')[0].handler({
         plateId: 'P-1',
         name: 'Platillo',
-        items: [{ ingredientId: 'I-1', requiredQuantity: 1 }],
+        items: [{ itemId: 'I-1', requiredQuantity: 1 }],
       }),
     ).resolves.toBeUndefined();
   });
