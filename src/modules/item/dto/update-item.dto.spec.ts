@@ -1,9 +1,13 @@
 import 'reflect-metadata';
 import { describe, it, expect } from 'vitest';
-import { ArgumentMetadata, BadRequestException, ValidationPipe } from '@nestjs/common';
+import {
+  ArgumentMetadata,
+  BadRequestException,
+  ValidationPipe,
+} from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { UpdateIngredientDto } from './update-ingredient.dto.js';
+import { UpdateItemDto } from './update-item.dto.js';
 
 const pipe = new ValidationPipe({
   whitelist: true,
@@ -13,7 +17,7 @@ const pipe = new ValidationPipe({
 
 const metadata: ArgumentMetadata = {
   type: 'body',
-  metatype: UpdateIngredientDto,
+  metatype: UpdateItemDto,
   data: '',
 };
 
@@ -22,8 +26,10 @@ interface DtoError {
   messages: string[];
 }
 
-async function validateDto(payload: Record<string, unknown>): Promise<DtoError[]> {
-  const errors = await validate(plainToInstance(UpdateIngredientDto, payload));
+async function validateDto(
+  payload: Record<string, unknown>,
+): Promise<DtoError[]> {
+  const errors = await validate(plainToInstance(UpdateItemDto, payload));
 
   return errors.map((error) => ({
     property: error.property,
@@ -31,7 +37,7 @@ async function validateDto(payload: Record<string, unknown>): Promise<DtoError[]
   }));
 }
 
-function transform(payload: Record<string, unknown>): Promise<UpdateIngredientDto> {
+function transform(payload: Record<string, unknown>): Promise<UpdateItemDto> {
   return pipe.transform(payload, metadata);
 }
 
@@ -50,9 +56,9 @@ async function pipeErrorMessages(
   }
 }
 
-describe('UpdateIngredientDto', () => {
+describe('UpdateItemDto', () => {
   it('debería estar definido', () => {
-    expect(UpdateIngredientDto).toBeDefined();
+    expect(UpdateItemDto).toBeDefined();
   });
 });
 
@@ -125,7 +131,9 @@ describe('reglas de validación heredadas', () => {
   });
 
   it('debería rechazar un supplierIdSugested que no es un ObjectId', async () => {
-    const errors = await validateDto({ supplierIdSugested: 'no-es-un-objectid' });
+    const errors = await validateDto({
+      supplierIdSugested: 'no-es-un-objectid',
+    });
 
     expect(errors[0].property).toBe('supplierIdSugested');
   });

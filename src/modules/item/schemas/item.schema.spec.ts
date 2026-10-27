@@ -1,13 +1,13 @@
 import 'reflect-metadata';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import mongoose, { Model } from 'mongoose';
-import { EstadoUmbral, Ingredient, IngredientSchema } from './ingredient.schema.js';
+import { EstadoUmbral, Item, ItemSchema } from './item.schema.js';
 
-const MODEL_NAME = 'IngredientSchemaSpec';
+const MODEL_NAME = 'ItemSchemaSpec';
 
-let IngredientModel: Model<Ingredient>;
+let ItemModel: Model<Item>;
 
-const validIngredient = {
+const validItem = {
   sku: 'ING-0001',
   name: 'Tomate',
   category: 'Verduras',
@@ -15,57 +15,55 @@ const validIngredient = {
   storageCondition: 'Refrigerado',
 };
 
-function build(overrides: Record<string, unknown> = {}): Ingredient {
-  return new IngredientModel({ ...validIngredient, ...overrides });
+function build(overrides: Record<string, unknown> = {}): Item {
+  return new ItemModel({ ...validItem, ...overrides });
 }
 
-function validationPaths(document: Ingredient): string[] {
+function validationPaths(document: Item): string[] {
   return Object.keys(document.validateSync()?.errors ?? {});
 }
 
 beforeAll(() => {
-  IngredientModel =
-    (mongoose.models[MODEL_NAME] as Model<Ingredient> | undefined) ??
-    (mongoose.model(MODEL_NAME, IngredientSchema) as Model<Ingredient>);
+  ItemModel =
+    (mongoose.models[MODEL_NAME] as Model<Item> | undefined) ??
+    (mongoose.model(MODEL_NAME, ItemSchema) as Model<Item>);
 });
 
 afterAll(() => {
   mongoose.deleteModel(MODEL_NAME);
 });
 
-describe('IngredientSchema', () => {
+describe('ItemSchema', () => {
   it('debería estar definido', () => {
-    expect(IngredientSchema).toBeDefined();
+    expect(ItemSchema).toBeDefined();
   });
 
   it('debería declarar name como único', () => {
-    expect(IngredientSchema.path('name').options.unique).toBe(true);
+    expect(ItemSchema.path('name').options.unique).toBe(true);
   });
 
   it('debería referenciar la colección Supplier en supplierIdSugested', () => {
-    expect(IngredientSchema.path('supplierIdSugested').options.ref).toBe(
-      'Supplier',
-    );
+    expect(ItemSchema.path('supplierIdSugested').options.ref).toBe('Supplier');
   });
 
   it('debería tener timestamps habilitados', () => {
-    expect(IngredientSchema.options.timestamps).toBe(true);
+    expect(ItemSchema.options.timestamps).toBe(true);
   });
 
   it('debería exponer los virtuals en toJSON y toObject', () => {
-    expect(IngredientSchema.options.toJSON).toEqual({ virtuals: true });
-    expect(IngredientSchema.options.toObject).toEqual({ virtuals: true });
+    expect(ItemSchema.options.toJSON).toEqual({ virtuals: true });
+    expect(ItemSchema.options.toObject).toEqual({ virtuals: true });
   });
 });
 
 describe('defaults', () => {
   it('debería aplicar el valor por defecto 0 en los campos numéricos', () => {
-    const ingredient = build();
+    const item = build();
 
-    expect(ingredient.minStock).toBe(0);
-    expect(ingredient.averageCost).toBe(0);
-    expect(ingredient.reservedStock).toBe(0);
-    expect(ingredient.totalStock).toBe(0);
+    expect(item.minStock).toBe(0);
+    expect(item.averageCost).toBe(0);
+    expect(item.reservedStock).toBe(0);
+    expect(item.totalStock).toBe(0);
   });
 
   it('debería aplicar el valor por defecto null en supplierIdSugested', () => {
@@ -85,13 +83,13 @@ describe('required', () => {
   it.each(['sku', 'name', 'category', 'unit', 'storageCondition'])(
     'debería exigir el campo %s',
     (field) => {
-      const ingredient = build({ [field]: undefined });
+      const item = build({ [field]: undefined });
 
-      expect(validationPaths(ingredient)).toContain(field);
+      expect(validationPaths(item)).toContain(field);
     },
   );
 
-  it('debería validar sin errores un ingrediente completo', () => {
+  it('debería validar sin errores un item completo', () => {
     expect(validationPaths(build())).toEqual([]);
   });
 });
@@ -100,9 +98,9 @@ describe('min', () => {
   it.each(['minStock', 'averageCost', 'reservedStock', 'totalStock'])(
     'debería rechazar un %s negativo',
     (field) => {
-      const ingredient = build({ [field]: -1 });
+      const item = build({ [field]: -1 });
 
-      expect(validationPaths(ingredient)).toContain(field);
+      expect(validationPaths(item)).toContain(field);
     },
   );
 
@@ -115,9 +113,9 @@ describe('min', () => {
   });
 
   it('debería aceptar cualquier condición de almacenamiento', () => {
-    expect(
-      validationPaths(build({ storageCondition: 'Congelado' })),
-    ).toEqual([]);
+    expect(validationPaths(build({ storageCondition: 'Congelado' }))).toEqual(
+      [],
+    );
   });
 });
 
@@ -135,35 +133,33 @@ describe('trim y casting', () => {
   });
 
   it('debería convertir un minStock numérico en texto a number', () => {
-    const ingredient = build({ minStock: '7' });
+    const item = build({ minStock: '7' });
 
-    expect(ingredient.minStock).toBe(7);
-    expect(typeof ingredient.minStock).toBe('number');
+    expect(item.minStock).toBe(7);
+    expect(typeof item.minStock).toBe('number');
   });
 });
 
 describe('supplierIdSugested', () => {
   it('debería estar tipado como ObjectId', () => {
-    expect(IngredientSchema.path('supplierIdSugested').instance).toBe('ObjectId');
+    expect(ItemSchema.path('supplierIdSugested').instance).toBe('ObjectId');
   });
 
   it('debería castear un identificador en texto a ObjectId', () => {
-    const ingredient = build({
+    const item = build({
       supplierIdSugested: '507f1f77bcf86cd799439011',
     });
 
-    expect(ingredient.supplierIdSugested).toBeInstanceOf(
-      mongoose.Types.ObjectId,
-    );
-    expect(ingredient.supplierIdSugested?.toString()).toBe(
+    expect(item.supplierIdSugested).toBeInstanceOf(mongoose.Types.ObjectId);
+    expect(item.supplierIdSugested?.toString()).toBe(
       '507f1f77bcf86cd799439011',
     );
   });
 
   it('debería rechazar un valor que no es un ObjectId', () => {
-    const ingredient = build({ supplierIdSugested: 'no-es-un-objectid' });
+    const item = build({ supplierIdSugested: 'no-es-un-objectid' });
 
-    expect(validationPaths(ingredient)).toContain('supplierIdSugested');
+    expect(validationPaths(item)).toContain('supplierIdSugested');
   });
 });
 
@@ -183,21 +179,21 @@ describe('availableStock', () => {
 
 describe('status', () => {
   it('debería ser OPTIMO cuando el disponible supera el mínimo', () => {
-    expect(build({ totalStock: 10, reservedStock: 4, minStock: 3 }).status).toBe(
-      EstadoUmbral.OPTIMO,
-    );
+    expect(
+      build({ totalStock: 10, reservedStock: 4, minStock: 3 }).status,
+    ).toBe(EstadoUmbral.OPTIMO);
   });
 
   it('debería ser BAJO cuando el disponible es igual al mínimo', () => {
-    expect(build({ totalStock: 10, reservedStock: 4, minStock: 6 }).status).toBe(
-      EstadoUmbral.BAJO,
-    );
+    expect(
+      build({ totalStock: 10, reservedStock: 4, minStock: 6 }).status,
+    ).toBe(EstadoUmbral.BAJO);
   });
 
   it('debería ser BAJO cuando el disponible es menor al mínimo', () => {
-    expect(build({ totalStock: 10, reservedStock: 8, minStock: 5 }).status).toBe(
-      EstadoUmbral.BAJO,
-    );
+    expect(
+      build({ totalStock: 10, reservedStock: 8, minStock: 5 }).status,
+    ).toBe(EstadoUmbral.BAJO);
   });
 
   it('debería ser CRITICO cuando no hay stock disponible', () => {
@@ -223,14 +219,22 @@ describe('EstadoUmbral', () => {
 
 describe('serialización', () => {
   it('debería incluir availableStock y status en toJSON', () => {
-    const json = build({ totalStock: 10, reservedStock: 4, minStock: 3 }).toJSON();
+    const json = build({
+      totalStock: 10,
+      reservedStock: 4,
+      minStock: 3,
+    }).toJSON();
 
     expect(json.availableStock).toBe(6);
     expect(json.status).toBe(EstadoUmbral.OPTIMO);
   });
 
   it('debería incluir availableStock y status en toObject', () => {
-    const object = build({ totalStock: 10, reservedStock: 4, minStock: 3 }).toObject();
+    const object = build({
+      totalStock: 10,
+      reservedStock: 4,
+      minStock: 3,
+    }).toObject();
 
     expect(object.availableStock).toBe(6);
     expect(object.status).toBe(EstadoUmbral.OPTIMO);

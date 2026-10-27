@@ -24,12 +24,12 @@ export const InventoryRoutingKeys = {
 
 // Una cola por dominio suscriptor de este microservicio
 export const RECIPE_EVENTS_QUEUE = 'cola_recipe_events';
-export const INGREDIENT_EVENTS_QUEUE = 'cola_ingredient_events';
+export const ITEM_EVENTS_QUEUE = 'cola_item_events';
 export const BATCH_EVENTS_QUEUE = 'cola_batch_events';
 
 // Payload de los eventos de menú (placeholder hasta tener el contrato real)
 export interface PlateEventItem {
-  ingredientId: string;
+  itemId: string;
   requiredQuantity: number;
 }
 

@@ -12,7 +12,7 @@ export enum EstadoUmbral {
   toJSON: { virtuals: true },
   toObject: { virtuals: true },
 })
-export class Ingredient extends Document {
+export class Item extends Document {
   @Prop({ required: true, trim: true, unique: true })
   sku: string; // Ej: 'ING-0001', 'ING-0002'
 
@@ -55,7 +55,7 @@ export class Ingredient extends Document {
   @Prop({ required: true, default: 0, min: 0 })
   totalStock: number;
 
-  // Baja lógica: el DELETE marca el ingrediente como inactivo en vez de borrarlo.
+  // Baja lógica: el DELETE marca el item como inactivo en vez de borrarlo.
   @Prop({ required: true, default: true })
   isActive: boolean;
 
@@ -66,22 +66,22 @@ export class Ingredient extends Document {
   declare status: EstadoUmbral;
 }
 
-export const IngredientSchema = SchemaFactory.createForClass(Ingredient);
+export const ItemSchema = SchemaFactory.createForClass(Item);
 
-IngredientSchema.index({ isActive: 1 });
+ItemSchema.index({ isActive: 1 });
 
-IngredientSchema.virtual('supplierSugested', {
+ItemSchema.virtual('supplierSugested', {
   ref: 'Supplier',
   localField: 'supplierIdSugested',
   foreignField: '_id',
   justOne: true,
 });
 
-IngredientSchema.virtual('availableStock').get(function (this: Ingredient) {
+ItemSchema.virtual('availableStock').get(function (this: Item) {
   return Math.max(0, (this.totalStock ?? 0) - (this.reservedStock ?? 0));
 });
 
-IngredientSchema.virtual('status').get(function (this: Ingredient) {
+ItemSchema.virtual('status').get(function (this: Item) {
   const available = Math.max(
     0,
     (this.totalStock ?? 0) - (this.reservedStock ?? 0),

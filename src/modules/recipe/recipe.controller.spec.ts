@@ -19,8 +19,8 @@ describe('RecipeController', () => {
     productionCost: 25.5,
     items: [
       {
-        ingredientId: '60d5ec9af682fbd39a1b865b',
-        ingredientName: 'Carne',
+        itemId: '60d5ec9af682fbd39a1b865b',
+        itemName: 'Carne',
         unit: 'kg',
         requiredQuantity: 0.2,
         availableStock: 2,
@@ -72,7 +72,7 @@ describe('RecipeController', () => {
       const dto = {
         plateId: 'PLATE-001',
         name: 'Hamburguesa clásica',
-        items: [{ ingredientId: '60d5ec9af682fbd39a1b865b', requiredQuantity: 0.2 }],
+        items: [{ itemId: '60d5ec9af682fbd39a1b865b', requiredQuantity: 0.2 }],
       };
 
       const result = await controller.createOrUpdate(dto, mockRes);
@@ -91,7 +91,7 @@ describe('RecipeController', () => {
       const dto = {
         plateId: 'PLATE-001',
         name: 'Hamburguesa clásica',
-        items: [{ ingredientId: '60d5ec9af682fbd39a1b865b', requiredQuantity: 0.2 }],
+        items: [{ itemId: '60d5ec9af682fbd39a1b865b', requiredQuantity: 0.2 }],
       };
 
       const result = await controller.createOrUpdate(dto, mockRes);

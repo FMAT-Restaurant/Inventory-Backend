@@ -1,9 +1,13 @@
 import 'reflect-metadata';
 import { describe, it, expect } from 'vitest';
-import { ArgumentMetadata, BadRequestException, ValidationPipe } from '@nestjs/common';
+import {
+  ArgumentMetadata,
+  BadRequestException,
+  ValidationPipe,
+} from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { CreateIngredientDto } from './create-ingredient.dto.js';
+import { CreateItemDto } from './create-item.dto.js';
 
 const pipe = new ValidationPipe({
   whitelist: true,
@@ -13,7 +17,7 @@ const pipe = new ValidationPipe({
 
 const metadata: ArgumentMetadata = {
   type: 'body',
-  metatype: CreateIngredientDto,
+  metatype: CreateItemDto,
   data: '',
 };
 
@@ -31,8 +35,10 @@ interface DtoError {
   messages: string[];
 }
 
-async function validateDto(payload: Record<string, unknown>): Promise<DtoError[]> {
-  const errors = await validate(plainToInstance(CreateIngredientDto, payload));
+async function validateDto(
+  payload: Record<string, unknown>,
+): Promise<DtoError[]> {
+  const errors = await validate(plainToInstance(CreateItemDto, payload));
 
   return errors.map((error) => ({
     property: error.property,
@@ -40,7 +46,7 @@ async function validateDto(payload: Record<string, unknown>): Promise<DtoError[]
   }));
 }
 
-function transform(payload: Record<string, unknown>): Promise<CreateIngredientDto> {
+function transform(payload: Record<string, unknown>): Promise<CreateItemDto> {
   return pipe.transform(payload, metadata);
 }
 
@@ -59,28 +65,24 @@ async function pipeErrorMessages(
   }
 }
 
-describe('CreateIngredientDto', () => {
+describe('CreateItemDto', () => {
   it('debería estar definido', () => {
-    expect(CreateIngredientDto).toBeDefined();
+    expect(CreateItemDto).toBeDefined();
   });
 });
 
 describe('campos requeridos', () => {
-  it.each([
-    'sku',
-    'name',
-    'category',
-    'unit',
-    'minStock',
-    'storageCondition',
-  ])('debería fallar cuando falta %s', async (field) => {
-    const payload: Record<string, unknown> = { ...validPayload };
-    delete payload[field];
+  it.each(['sku', 'name', 'category', 'unit', 'minStock', 'storageCondition'])(
+    'debería fallar cuando falta %s',
+    async (field) => {
+      const payload: Record<string, unknown> = { ...validPayload };
+      delete payload[field];
 
-    const errors = await validateDto(payload);
+      const errors = await validateDto(payload);
 
-    expect(errors.map((error) => error.property)).toContain(field);
-  });
+      expect(errors.map((error) => error.property)).toContain(field);
+    },
+  );
 
   it('debería rechazar el payload con un campo faltante', async () => {
     await expect(
@@ -160,7 +162,9 @@ describe('isPerishable', () => {
     const errors = await validateDto({ ...validPayload, isPerishable: 'sí' });
 
     expect(errors[0].property).toBe('isPerishable');
-    expect(errors[0].messages).toContain('isPerishable must be a boolean value');
+    expect(errors[0].messages).toContain(
+      'isPerishable must be a boolean value',
+    );
   });
 });
 
@@ -179,9 +183,7 @@ describe('averageCost', () => {
     const errors = await validateDto({ ...validPayload, averageCost: -1 });
 
     expect(errors[0].property).toBe('averageCost');
-    expect(errors[0].messages).toContain(
-      'averageCost must not be less than 0',
-    );
+    expect(errors[0].messages).toContain('averageCost must not be less than 0');
   });
 });
 
@@ -220,21 +222,17 @@ describe('supplierIdSugested', () => {
 });
 
 describe('whitelist', () => {
-  it.each([
-    'totalStock',
-    'reservedStock',
-    'isActive',
-    'stock',
-    'cost',
-    'hack',
-  ])('debería rechazar la propiedad no declarada %s', async (property) => {
-    const messages = await pipeErrorMessages({
-      ...validPayload,
-      [property]: 'valor',
-    });
+  it.each(['totalStock', 'reservedStock', 'isActive', 'stock', 'cost', 'hack'])(
+    'debería rechazar la propiedad no declarada %s',
+    async (property) => {
+      const messages = await pipeErrorMessages({
+        ...validPayload,
+        [property]: 'valor',
+      });
 
-    expect(messages).toContain(`property ${property} should not exist`);
-  });
+      expect(messages).toContain(`property ${property} should not exist`);
+    },
+  );
 });
 
 describe('transform', () => {

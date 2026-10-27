@@ -41,12 +41,15 @@ export class RecipeController {
     type: RecipeResponseDto,
   })
   @ApiOkResponse({
-    description: 'Receta existente actualizada exitosamente de forma idempotente',
+    description:
+      'Receta existente actualizada exitosamente de forma idempotente',
     type: RecipeResponseDto,
   })
-  @ApiBadRequestResponse({ description: 'Datos de entrada inválidos o incompletos' })
+  @ApiBadRequestResponse({
+    description: 'Datos de entrada inválidos o incompletos',
+  })
   @ApiNotFoundResponse({
-    description: 'Uno o más ingredientes referenciados no existen en el catálogo',
+    description: 'Uno o más items referenciados no existen en el catálogo',
   })
   @ApiConflictResponse({ description: 'Conflicto al persistir la receta' })
   async createOrUpdate(
@@ -101,7 +104,7 @@ export class RecipeController {
     description: 'Receta actualizada con éxito',
     type: RecipeResponseDto,
   })
-  @ApiNotFoundResponse({ description: 'Receta o ingredientes no encontrados' })
+  @ApiNotFoundResponse({ description: 'Receta o items no encontrados' })
   update(
     @Param('id') id: string,
     @Body() updateRecipeDto: UpdateRecipeDto,

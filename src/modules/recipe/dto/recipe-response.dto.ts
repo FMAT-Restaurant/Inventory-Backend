@@ -2,16 +2,16 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class RecipeItemDetailResponseDto {
   @ApiProperty({
-    description: 'ID del ingrediente',
+    description: 'ID del item',
     example: '60d5ec9af682fbd39a1b865b',
   })
-  ingredientId: string;
+  itemId: string;
 
   @ApiProperty({
-    description: 'Nombre del ingrediente',
+    description: 'Nombre del item',
     example: 'Carne de res molida',
   })
-  ingredientName: string;
+  itemName: string;
 
   @ApiProperty({
     description: 'Unidad de medida',
@@ -58,25 +58,28 @@ export class RecipeResponseDto {
   name: string;
 
   @ApiProperty({
-    description: 'Indica si la receta está disponible según las existencias de todos sus insumos',
+    description:
+      'Indica si la receta está disponible según las existencias de todos sus insumos',
     example: true,
   })
   isAvailable: boolean;
 
   @ApiProperty({
-    description: 'Número máximo de porciones que se pueden preparar con el stock actual',
+    description:
+      'Número máximo de porciones que se pueden preparar con el stock actual',
     example: 25,
   })
   maxPreparablePortions: number;
 
   @ApiProperty({
-    description: 'Costo total estimado de producción por porción según costo unitario de ingredientes',
+    description:
+      'Costo total estimado de producción por porción según costo unitario de items',
     example: 45.5,
   })
   productionCost: number;
 
   @ApiProperty({
-    description: 'Lista detallada de ingredientes requeridos y su disponibilidad',
+    description: 'Lista detallada de items requeridos y su disponibilidad',
     type: [RecipeItemDetailResponseDto],
   })
   items: RecipeItemDetailResponseDto[];

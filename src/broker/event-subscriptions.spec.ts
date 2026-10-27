@@ -5,13 +5,13 @@ describe('EventSubscriptions', () => {
   it('registra suscripciones y las expone en "all"', () => {
     const handler = () => undefined;
     const subscriptions = new EventSubscriptions()
-      .on('inventory.topic', 'ingredient.created', handler)
+      .on('inventory.topic', 'item.created', handler)
       .on('inventory.topic', 'batch.#', handler);
 
     expect(subscriptions.all).toHaveLength(2);
     expect(subscriptions.all[0]).toMatchObject({
       exchange: 'inventory.topic',
-      routingKey: 'ingredient.created',
+      routingKey: 'item.created',
       handler,
     });
   });
@@ -19,37 +19,35 @@ describe('EventSubscriptions', () => {
   it('lanza error si se suscribe dos veces al mismo evento', () => {
     const subscriptions = new EventSubscriptions().on(
       'inventory.topic',
-      'ingredient.created',
+      'item.created',
       () => undefined,
     );
 
     expect(() =>
-      subscriptions.on('inventory.topic', 'ingredient.created', () => undefined),
+      subscriptions.on('inventory.topic', 'item.created', () => undefined),
     ).toThrow('Ya existe una suscripción');
   });
 
   it('hace match exacto con la routing key', () => {
     const subscriptions = new EventSubscriptions().on(
       'inventory.topic',
-      'ingredient.created',
+      'item.created',
       () => undefined,
     );
 
-    expect(subscriptions.matching('ingredient.created')).toHaveLength(1);
-    expect(subscriptions.matching('ingredient.updated')).toHaveLength(0);
+    expect(subscriptions.matching('item.created')).toHaveLength(1);
+    expect(subscriptions.matching('item.updated')).toHaveLength(0);
   });
 
   it('hace match con el comodín "*"', () => {
     const subscriptions = new EventSubscriptions().on(
       'inventory.topic',
-      'ingredient.*',
+      'item.*',
       () => undefined,
     );
 
-    expect(subscriptions.matching('ingredient.created')).toHaveLength(1);
-    expect(subscriptions.matching('ingredient.created.something')).toHaveLength(
-      0,
-    );
+    expect(subscriptions.matching('item.created')).toHaveLength(1);
+    expect(subscriptions.matching('item.created.something')).toHaveLength(0);
   });
 
   it('hace match con el comodín "#"', () => {
@@ -62,7 +60,7 @@ describe('EventSubscriptions', () => {
     expect(subscriptions.matching('batch')).toHaveLength(1);
     expect(subscriptions.matching('batch.created')).toHaveLength(1);
     expect(subscriptions.matching('batch.created.detail')).toHaveLength(1);
-    expect(subscriptions.matching('ingredient.created')).toHaveLength(0);
+    expect(subscriptions.matching('item.created')).toHaveLength(0);
   });
 
   it('puede devolver múltiples handlers para el mismo mensaje', () => {
@@ -76,12 +74,12 @@ describe('EventSubscriptions', () => {
   it('combina suscripciones con merge() omitiendo duplicados', () => {
     const base = new EventSubscriptions().on(
       'inventory.topic',
-      'ingredient.created',
+      'item.created',
       () => undefined,
     );
 
     const extra = new EventSubscriptions()
-      .on('inventory.topic', 'ingredient.created', () => undefined)
+      .on('inventory.topic', 'item.created', () => undefined)
       .on('inventory.topic', 'batch.created', () => undefined);
 
     base.merge(extra);

@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { EventConsumer } from '../../broker/event-customer.service.js';
 import { EventSubscriptions } from '../../broker/event-subscriptions.js';
-import { IngredientEvents } from './ingredient.events.js';
+import { ItemEvents } from './item.events.js';
 
-describe('IngredientEvents', () => {
-  let events: IngredientEvents;
+describe('ItemEvents', () => {
+  let events: ItemEvents;
   const consumeSubscriptions = vi.fn();
 
   beforeEach(async () => {
@@ -14,14 +14,14 @@ describe('IngredientEvents', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
-        IngredientEvents,
+        ItemEvents,
         {
           provide: EventConsumer,
           useValue: { consumeSubscriptions },
         },
       ],
     }).compile();
-    events = module.get<IngredientEvents>(IngredientEvents);
+    events = module.get<ItemEvents>(ItemEvents);
   });
 
   it('escucha creación y actualización de platillos en su propia cola', async () => {
@@ -31,7 +31,7 @@ describe('IngredientEvents', () => {
       string,
     ];
 
-    expect(queue).toBe('cola_ingredient_events');
+    expect(queue).toBe('cola_item_events');
     expect(
       subscriptions.all.map(({ exchange, routingKey }) => [
         exchange,

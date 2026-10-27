@@ -9,12 +9,12 @@ describe('BatchController', () => {
   let service: BatchService;
 
   const mockBatchId = '507f1f77bcf86cd799439011';
-  const mockIngredientId = '60d5ec9af682fbd39a1b865b';
+  const mockItemId = '60d5ec9af682fbd39a1b865b';
 
   const mockBatch = {
     _id: mockBatchId,
     batchNumber: 'LOTE-1',
-    ingredientId: mockIngredientId,
+    itemId: mockItemId,
     initialQuantity: 10,
     quantity: 10,
     cost: 15,
@@ -58,9 +58,9 @@ describe('BatchController', () => {
       expect(result).toEqual([mockBatch]);
     });
 
-    it('debería pasar ingredientId al servicio cuando se provee', async () => {
-      const result = await controller.findAll(mockIngredientId);
-      expect(service.findAll).toHaveBeenCalledWith(mockIngredientId);
+    it('debería pasar itemId al servicio cuando se provee', async () => {
+      const result = await controller.findAll(mockItemId);
+      expect(service.findAll).toHaveBeenCalledWith(mockItemId);
       expect(result).toEqual([mockBatch]);
     });
   });
@@ -77,7 +77,7 @@ describe('BatchController', () => {
     it('debería crear un nuevo lote', async () => {
       const dto = {
         batchNumber: 'LOTE-1',
-        ingredientId: mockIngredientId,
+        itemId: mockItemId,
         quantity: 10,
         cost: 15,
         expirationDate: '2026-12-31',

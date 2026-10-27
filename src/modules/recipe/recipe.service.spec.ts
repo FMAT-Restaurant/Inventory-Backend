@@ -5,8 +5,8 @@ import { NotFoundException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { RecipeService } from './recipe.service.js';
 import { Recipe } from './schemas/recipe.schema.js';
-import { IngredientService } from '../ingredient/ingredient.service.js';
-import { IngredientChangeEmitter } from '../ingredient/ingredient-change.emitter.js';
+import { ItemService } from '../item/item.service.js';
+import { ItemChangeEmitter } from '../item/item-change.emitter.js';
 import { EventPublisher } from '../../broker/event-publisher.service.js';
 
 describe('RecipeService', () => {
@@ -19,20 +19,20 @@ describe('RecipeService', () => {
   const mockSave = vi.fn();
 
   const mockRecipeId = '507f1f77bcf86cd799439011';
-  const mockIngredientId1 = '60d5ec9af682fbd39a1b865b';
-  const mockIngredientId2 = '60d5ec9af682fbd39a1b865c';
+  const mockItemId1 = '60d5ec9af682fbd39a1b865b';
+  const mockItemId2 = '60d5ec9af682fbd39a1b865c';
 
   const mockCreateDto = {
     plateId: 'PLATE-001',
     name: 'Hamburguesa',
     items: [
-      { ingredientId: mockIngredientId1, requiredQuantity: 0.2 },
-      { ingredientId: mockIngredientId2, requiredQuantity: 1 },
+      { itemId: mockItemId1, requiredQuantity: 0.2 },
+      { itemId: mockItemId2, requiredQuantity: 1 },
     ],
   };
 
-  const ingredient1 = {
-    _id: new Types.ObjectId(mockIngredientId1),
+  const item1 = {
+    _id: new Types.ObjectId(mockItemId1),
     name: 'Carne',
     unit: 'kg',
     availableStock: 2,
@@ -42,8 +42,8 @@ describe('RecipeService', () => {
     cost: 50,
   };
 
-  const ingredient2 = {
-    _id: new Types.ObjectId(mockIngredientId2),
+  const item2 = {
+    _id: new Types.ObjectId(mockItemId2),
     name: 'Pan',
     unit: 'pza',
     availableStock: 5,
@@ -63,7 +63,7 @@ describe('RecipeService', () => {
   MockModel.findById = vi.fn().mockReturnValue({ exec: mockExecFindById });
   MockModel.deleteOne = vi.fn().mockReturnValue({ exec: mockExecDeleteOne });
 
-  const mockIngredientService = {
+  const mockItemService = {
     findOne: vi.fn(),
     findAll: vi.fn(),
   };
@@ -76,15 +76,12 @@ describe('RecipeService', () => {
     vi.clearAllMocks();
     mockSave.mockResolvedValue({});
 
-    mockIngredientService.findOne.mockImplementation((id: string) => {
-      if (id === mockIngredientId1) return Promise.resolve(ingredient1);
-      if (id === mockIngredientId2) return Promise.resolve(ingredient2);
+    mockItemService.findOne.mockImplementation((id: string) => {
+      if (id === mockItemId1) return Promise.resolve(item1);
+      if (id === mockItemId2) return Promise.resolve(item2);
       return Promise.reject(new NotFoundException());
     });
-    mockIngredientService.findAll.mockResolvedValue([
-      ingredient1,
-      ingredient2,
-    ]);
+    mockItemService.findAll.mockResolvedValue([item1, item2]);
     mockPublisher.publish.mockResolvedValue(undefined);
 
     const module: TestingModule = await Test.createTestingModule({
@@ -95,12 +92,12 @@ describe('RecipeService', () => {
           useValue: MockModel,
         },
         {
-          provide: IngredientService,
-          useValue: mockIngredientService,
+          provide: ItemService,
+          useValue: mockItemService,
         },
         {
-          provide: IngredientChangeEmitter,
-          useValue: new IngredientChangeEmitter(),
+          provide: ItemChangeEmitter,
+          useValue: new ItemChangeEmitter(),
         },
         {
           provide: EventPublisher,
@@ -158,26 +155,24 @@ describe('RecipeService', () => {
       expect(result.recipe.name).toBe('Hamburguesa');
     });
 
-    it('debería lanzar NotFoundException si algún ingrediente no existe', async () => {
-      mockIngredientService.findOne.mockRejectedValueOnce(
-        new NotFoundException(),
-      );
+    it('debería lanzar NotFoundException si algún item no existe', async () => {
+      mockItemService.findOne.mockRejectedValueOnce(new NotFoundException());
 
       await expect(
         service.registerOrUpdate({
           ...mockCreateDto,
-          items: [{ ingredientId: 'nonexistentId', requiredQuantity: 1 }],
+          items: [{ itemId: 'nonexistentId', requiredQuantity: 1 }],
         }),
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('debería manejar cuello de botella y marcar isAvailable en false si un ingrediente tiene stock 0', async () => {
+    it('debería manejar cuello de botella y marcar isAvailable en false si un item tiene stock 0', async () => {
       mockExecFindOne.mockResolvedValue(null);
-      mockIngredientService.findOne.mockImplementation((id: string) => {
-        if (id === mockIngredientId1) return Promise.resolve(ingredient1);
-        if (id === mockIngredientId2)
+      mockItemService.findOne.mockImplementation((id: string) => {
+        if (id === mockItemId1) return Promise.resolve(item1);
+        if (id === mockItemId2)
           return Promise.resolve({
-            ...ingredient2,
+            ...item2,
             stock: 0,
             availableStock: 0,
             totalStock: 0,
@@ -201,7 +196,7 @@ describe('RecipeService', () => {
         name: 'Hamburguesa',
         items: [
           {
-            ingredientId: new Types.ObjectId(mockIngredientId1),
+            itemId: new Types.ObjectId(mockItemId1),
             requiredQuantity: 0.2,
           },
         ],
@@ -222,7 +217,7 @@ describe('RecipeService', () => {
         name: 'Hamburguesa',
         items: [
           {
-            ingredientId: new Types.ObjectId(mockIngredientId1),
+            itemId: new Types.ObjectId(mockItemId1),
             requiredQuantity: 0.2,
           },
         ],
@@ -233,7 +228,7 @@ describe('RecipeService', () => {
         name: 'Ensalada',
         items: [
           {
-            ingredientId: new Types.ObjectId(mockIngredientId1),
+            itemId: new Types.ObjectId(mockItemId1),
             requiredQuantity: 500, // Requiere más del stock disponible (2)
           },
         ],
@@ -255,7 +250,7 @@ describe('RecipeService', () => {
         name: 'Hamburguesa',
         items: [
           {
-            ingredientId: new Types.ObjectId(mockIngredientId1),
+            itemId: new Types.ObjectId(mockItemId1),
             requiredQuantity: 0.2,
           },
         ],

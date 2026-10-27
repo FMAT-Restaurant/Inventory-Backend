@@ -3,16 +3,14 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { BatchController } from './batch.controller.js';
 import { BatchService } from './batch.service.js';
 import { Batch, BatchSchema } from './schemas/batch.schema.js';
-import { IngredientsModule } from '../ingredient/ingredient.module.js';
+import { ItemsModule } from '../item/item.module.js';
 import { BatchEvents } from './batch.events.js';
 import { BrokerModule } from '../../broker/broker.module.js';
 
 @Module({
   imports: [
-    MongooseModule.forFeature([
-      { name: Batch.name, schema: BatchSchema },
-    ]),
-    IngredientsModule,
+    MongooseModule.forFeature([{ name: Batch.name, schema: BatchSchema }]),
+    ItemsModule,
     BrokerModule,
   ],
   controllers: [BatchController],
