@@ -20,6 +20,7 @@ import {
   INVENTORY_EXCHANGE,
   InventoryRoutingKeys,
   RecipeAvailabilityChangedEvent,
+  RecipeNotAvailableEvent,
 } from '../../broker/event-conventions.js';
 import { Recipe } from './schemas/recipe.schema.js';
 import { CreateRecipeDto } from './dto/create-recipe.dto.js';
@@ -99,6 +100,7 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
     }
 
     const response = this.buildResponseDto(recipe, itemMap);
+    await this.persistAvailabilityState(recipe, response.isAvailable);
     await this.publishAvailabilityChanged(response);
 
     return {
@@ -175,6 +177,7 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
     const itemMap = await this.validateAndFetchItems(itemIds, false);
 
     const response = this.buildResponseDto(recipe, itemMap);
+    await this.persistAvailabilityState(recipe, response.isAvailable);
     await this.publishAvailabilityChanged(response);
 
     return response;
@@ -232,24 +235,95 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
   private async publishAvailabilityForItem(
     event: ItemChangedEvent,
   ): Promise<void> {
+    let recipes: Recipe[];
+
     try {
-      const recipes = await this.recipeModel
+      recipes = await this.recipeModel
         .find({ 'items.itemId': new Types.ObjectId(event.itemId) })
         .exec();
-
-      for (const recipe of recipes) {
-        const itemIds = recipe.items.map((item) => item.itemId.toString());
-        const itemMap = await this.validateAndFetchItems(itemIds, false);
-        await this.publishAvailabilityChanged(
-          this.buildResponseDto(recipe, itemMap),
-        );
-      }
     } catch (error) {
       this.logger.error(
         `Error al recalcular disponibilidad tras '${event.action}' del item '${event.itemId}':`,
         error,
       );
+      return;
     }
+
+    for (const recipe of recipes) {
+      try {
+        const itemIds = recipe.items.map((item) => item.itemId.toString());
+        const itemMap = await this.validateAndFetchItems(itemIds, false);
+        const response = this.buildResponseDto(recipe, itemMap);
+
+        await this.publishAvailabilityChanged(response);
+        await this.handleUnavailabilityTransition(recipe, response);
+      } catch (error) {
+        this.logger.error(
+          `Error al recalcular disponibilidad de la receta '${recipe.plateId}' tras '${event.action}' del item '${event.itemId}':`,
+          error,
+        );
+      }
+    }
+  }
+
+  private async handleUnavailabilityTransition(
+    recipe: Recipe,
+    response: RecipeResponseDto,
+  ): Promise<void> {
+    const wasAvailable = recipe.lastKnownAvailability !== false;
+    const isAvailable = response.isAvailable;
+
+    if (wasAvailable && !isAvailable) {
+      const published = await this.publishNotAvailable(response);
+      if (published) {
+        await this.persistAvailabilityState(recipe, false);
+      }
+      return;
+    }
+
+    if (recipe.lastKnownAvailability !== isAvailable) {
+      await this.persistAvailabilityState(recipe, isAvailable);
+    }
+  }
+
+  private async publishNotAvailable(
+    response: RecipeResponseDto,
+  ): Promise<boolean> {
+    const event: RecipeNotAvailableEvent = {
+      plateId: response.plateId,
+      name: response.name,
+      limitingIngredients: response.items
+        .filter((item) => !item.hasSufficientStock)
+        .map((item) => ({
+          itemId: item.itemId,
+          itemName: item.itemName,
+          requiredQuantity: item.requiredQuantity,
+          availableStock: item.availableStock,
+        })),
+      timestamp: new Date().toISOString(),
+    };
+
+    try {
+      await this.publisher.publish(
+        INVENTORY_EXCHANGE,
+        InventoryRoutingKeys.RecipeNotAvailable,
+        event,
+      );
+      return true;
+    } catch (error) {
+      this.logger.warn(
+        `No se pudo publicar '${InventoryRoutingKeys.RecipeNotAvailable}' para plateId '${response.plateId}': ${error}`,
+      );
+      return false;
+    }
+  }
+
+  private async persistAvailabilityState(
+    recipe: Recipe,
+    isAvailable: boolean,
+  ): Promise<void> {
+    recipe.lastKnownAvailability = isAvailable;
+    await recipe.save();
   }
 
   private async findEntityByIdOrPlateId(idOrPlateId: string): Promise<Recipe> {

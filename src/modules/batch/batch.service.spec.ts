@@ -5,6 +5,8 @@ import { ConflictException, NotFoundException } from '@nestjs/common';
 import { BatchService } from './batch.service.js';
 import { Batch, BatchStatus } from './schemas/batch.schema.js';
 import { ItemService } from '../item/item.service.js';
+import { StockMovementService } from '../stock-movement/stock-movement.service.js';
+import { StockMovementType } from '../stock-movement/schemas/stock-movement.schema.js';
 
 describe('BatchService', () => {
   let service: BatchService;
@@ -58,6 +60,10 @@ describe('BatchService', () => {
     updateStockAndCost: vi.fn().mockResolvedValue({ _id: mockItemId }),
   };
 
+  const mockStockMovementService = {
+    record: vi.fn().mockResolvedValue({}),
+  };
+
   beforeEach(async () => {
     vi.clearAllMocks();
     mockExecFind.mockResolvedValue([mockBatch]);
@@ -76,6 +82,10 @@ describe('BatchService', () => {
         {
           provide: ItemService,
           useValue: mockItemService,
+        },
+        {
+          provide: StockMovementService,
+          useValue: mockStockMovementService,
         },
       ],
     }).compile();
@@ -277,6 +287,78 @@ describe('BatchService', () => {
       await expect(service.remove(mockBatchId)).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+
+  describe('movimientos de stock', () => {
+    it('registra un movimiento "in" al crear un lote con cantidad', async () => {
+      await service.create(mockCreateDto);
+
+      expect(mockStockMovementService.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          batchId: mockBatchId,
+          movementType: StockMovementType.IN,
+          quantity: mockCreateDto.quantity,
+          reason: 'Alta de lote',
+        }),
+      );
+    });
+
+    it('registra un ajuste firmado al actualizar la cantidad de un lote', async () => {
+      mockExecFindById.mockResolvedValue(mockBatch);
+      mockExecFindByIdAndUpdate.mockResolvedValue({
+        ...mockBatch,
+        quantity: 50,
+      });
+
+      await service.update(mockBatchId, {
+        quantity: 50,
+        reason: 'Conteo físico',
+        createdBy: 'chef-1',
+      });
+
+      expect(mockStockMovementService.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          batchId: mockBatchId,
+          movementType: StockMovementType.ADJUSTMENT,
+          quantity: 40,
+          reason: 'Conteo físico',
+          createdBy: 'chef-1',
+        }),
+      );
+    });
+
+    it('no registra movimiento si el ajuste no cambia la cantidad', async () => {
+      mockExecFindById.mockResolvedValue(mockBatch);
+      mockExecFindByIdAndUpdate.mockResolvedValue(mockBatch);
+
+      await service.update(mockBatchId, { cost: 20 });
+
+      expect(mockStockMovementService.record).not.toHaveBeenCalled();
+    });
+
+    it('registra un ajuste negativo al eliminar un lote con existencia', async () => {
+      mockExecFindById.mockResolvedValue(mockBatch);
+      mockExecDeleteOne.mockResolvedValue({ deletedCount: 1 });
+
+      await service.remove(mockBatchId);
+
+      expect(mockStockMovementService.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          batchId: mockBatchId,
+          movementType: StockMovementType.ADJUSTMENT,
+          quantity: -mockBatch.quantity,
+          reason: 'Eliminación de lote',
+        }),
+      );
+    });
+
+    it('no falla la operación de stock si falla el registro del movimiento', async () => {
+      mockStockMovementService.record.mockRejectedValueOnce(
+        new Error('auditoría caída'),
+      );
+
+      await expect(service.create(mockCreateDto)).resolves.toBeDefined();
     });
   });
 });

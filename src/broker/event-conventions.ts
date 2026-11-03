@@ -20,6 +20,7 @@ export const MenuRoutingKeys = {
 // Routing keys que publica el inventario
 export const InventoryRoutingKeys = {
   RecipeAvailabilityChanged: 'inventory.recipe.availability-changed',
+  RecipeNotAvailable: 'inventory.recipe.not-available',
 } as const;
 
 // Una cola por dominio suscriptor de este microservicio
@@ -47,5 +48,19 @@ export interface RecipeAvailabilityChangedEvent {
   isAvailable: boolean;
   maxPreparablePortions: number;
   productionCost: number;
+  timestamp: string;
+}
+
+export interface RecipeNotAvailableIngredient {
+  itemId: string;
+  itemName: string;
+  requiredQuantity: number;
+  availableStock: number;
+}
+
+export interface RecipeNotAvailableEvent {
+  plateId: string;
+  name: string;
+  limitingIngredients: RecipeNotAvailableIngredient[];
   timestamp: string;
 }
