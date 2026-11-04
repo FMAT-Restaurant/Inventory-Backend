@@ -17,5 +17,6 @@ import { StockMovementModule } from '../stock-movement/stock-movement.module.js'
   ],
   controllers: [BatchController],
   providers: [BatchService, BatchEvents],
+  exports: [BatchService],
 })
 export class BatchModule {}

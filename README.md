@@ -89,6 +89,11 @@ MONGODB_URI=mongodb://inventory:inventory_dev@localhost:27017/inventory?authSour
 PORT=3000
 APP_HOST_PORT=8083
 NODE_ENV=development
+RABBITMQ_URL=amqp://admin:supersecurepassword@host.docker.internal:5672
+RESERVATION_TTL_MINUTES=30
+RESERVATION_SWEEP_INTERVAL_MS=60000
+RESERVATION_CACHE_TTL_MS=30000
+RESERVATION_CACHE_ENABLED=true
 ```
 
 | Variable                     | Para qué sirve                                                        |
@@ -100,6 +105,11 @@ NODE_ENV=development
 | `PORT`                       | Puerto de NestJS al trabajar localmente.                              |
 | `APP_HOST_PORT`              | Puerto del host donde se publica la app en Docker (solo en dev).      |
 | `NODE_ENV`                   | Ambiente de ejecución: `development`, `qa` o `production`.            |
+| `RABBITMQ_URL`               | Conexión a RabbitMQ (CloudAMQP o local).                              |
+| `RESERVATION_TTL_MINUTES`    | Vigencia de reservas pendientes; `0` desactiva la expiración.         |
+| `RESERVATION_SWEEP_INTERVAL_MS` | Intervalo del barrido de expiración; `0` lo desactiva.          |
+| `RESERVATION_CACHE_TTL_MS`   | TTL de la caché de reservas en memoria.                               |
+| `RESERVATION_CACHE_ENABLED`  | Permite desactivar la caché con `false`.                              |
 
 Son valores de ejemplo para desarrollo. Cada integrante puede usar los mismos: tendrá una base de datos independiente en su computadora.
 
@@ -244,7 +254,7 @@ Al iniciar la app y conectarse con MongoDB, muestra:
 
 ## 7. Documentación OpenAPI
 
-Con la aplicación encendida, abre <http://localhost:8083/api> para ver y probar los endpoints en Swagger UI. El documento JSON está en <http://localhost:8083/api-json>. Si ejecutas NestJS en tu computadora (sin Docker), usa el puerto `3000`. Actualmente describe el endpoint inicial `GET /`; al agregar endpoints se incluirán en el documento generado por NestJS.
+Con la aplicación encendida, abre <http://localhost:8083/api> para ver y probar los endpoints en Swagger UI. El documento JSON está en <http://localhost:8083/api-json>. Si ejecutas NestJS en tu computadora (sin Docker), usa el puerto `3000`. Incluye los endpoints de items, lotes, proveedores, recetas y reservas de stock. Las reservas se consultan en `GET /reservations`, `GET /reservations/:orderId` y `GET /reservations/pending/summary`.
 
 Para generar el archivo YAML que se adjuntará a un release:
 

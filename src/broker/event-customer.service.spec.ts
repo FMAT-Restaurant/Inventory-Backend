@@ -216,7 +216,7 @@ describe('EventConsumer', () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('informa que no hay canal si falla la conexión y permite cerrar la instancia', async () => {
+  it('registra las suscripciones sin broker y permite cerrar la instancia', async () => {
     vi.mocked(amqp.connect).mockRejectedValueOnce(
       new Error('Broker no disponible'),
     );
@@ -224,7 +224,7 @@ describe('EventConsumer', () => {
 
     await expect(
       consumer.consumeSubscriptions(new EventSubscriptions(), 'recipes'),
-    ).rejects.toThrow('El canal de RabbitMQ no está inicializado');
+    ).resolves.toBeUndefined();
     await consumer.onModuleDestroy();
     expect(channel.close).not.toHaveBeenCalled();
   });

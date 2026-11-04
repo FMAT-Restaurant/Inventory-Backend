@@ -51,15 +51,19 @@ describe('EventPublisher', () => {
     );
   });
 
-  it('rechaza la publicación si el broker no creó un canal', async () => {
+  it('reintenta conectar al publicar si el broker estaba caído', async () => {
     vi.mocked(amqp.connect).mockRejectedValueOnce(new Error('Broker caído'));
     await publisher.onModuleInit();
 
-    await expect(
-      publisher.publish('inventory.topic', 'inventory.recipe.changed', {}),
-    ).rejects.toThrow('El canal de RabbitMQ no está inicializado');
+    await publisher.publish('inventory.topic', 'inventory.recipe.changed', {});
+
+    expect(amqp.connect).toHaveBeenCalledTimes(2);
+    expect(channel.publish).toHaveBeenCalledWith(
+      'inventory.topic',
+      'inventory.recipe.changed',
+      Buffer.from(JSON.stringify({})),
+    );
     await publisher.onModuleDestroy();
-    expect(channel.close).not.toHaveBeenCalled();
   });
 
   it('no publica si no puede declarar el exchange', async () => {

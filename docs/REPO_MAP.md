@@ -14,6 +14,8 @@
 | Items | `src/modules/item/` | Item catalog, search, stock/cost updates, `ItemChangeEmitter` |
 | Batches | `src/modules/batch/` | Batches, FEFO-aware status, stock/cost synchronization |
 | Recipes | `src/modules/recipe/` | Recipes, availability calculation, menu event handling, availability events |
+| Reservations | `src/modules/reservation/` | Reservation lifecycle, pending cache, Orders event consumer |
+| Processed events | `src/modules/processed-event/` | Persistent event idempotency (consumer + eventId) |
 | Suppliers | `src/modules/suppliers/` | Supplier catalog |
 | Test | `src/modules/test/` | Test utilities (restricted by environment) |
 | Database | `src/database/` | MongoDB connection |
@@ -29,8 +31,9 @@
 | Exchange | Direction | Routing Keys / Queues | Notes |
 | --- | --- | --- | --- |
 | `menu.topic` | Consume | `menu.plate.created`, `menu.plate.updated`, `menu.plate.deleted` / `cola_recipe_events` | Consumed by `RecipeEvents` |
-| `inventory.topic` | Publish | `inventory.recipe.availability-changed`, `inventory.recipe.not-available` | Published by `RecipeService` |
-| - | Queues | `cola_item_events`, `cola_batch_events` | Defined in conventions for subscription patterns |
+| `ordenes.topic` | Consume | `ordenes.order.created`, `.confirmed`, `.cancelled`, `.served` / `cola_orders_events` | Consumed by `OrdersEvents`; `served` pending Phase 2 |
+| `inventory.topic` | Publish | `inventory.recipe.availability-changed`, `inventory.recipe.not-available`, `inventory.reservation.*` | Published by `RecipeService` and `ReservationService` |
+| - | Queues | `cola_item_events`, `cola_batch_events`, `cola_orders_events` | Defined in conventions for subscription patterns |
 
 See `src/broker/event-conventions.ts` for payload contracts.
 
@@ -47,6 +50,13 @@ If changing recipes or availability:
 1. Check `docs/REQUIREMENTS.md` §5.6, §5.10 and `docs/SPEC.md` §10
 2. Update `src/modules/recipe/`
 3. Update `src/broker/event-conventions.ts` if events change
+4. Add/update tests
+5. Run `./scripts/verify_repo.sh`
+
+If changing reservations or Orders integration:
+1. Check `docs/REQUIREMENTS.md` §5.8-5.9 and `docs/SPEC.md` §8.3, §9.2
+2. Update `src/modules/reservation/` and `src/modules/item/item.service.ts`
+3. Keep `reservedStock` changes atomic and invalidate the reservation cache
 4. Add/update tests
 5. Run `./scripts/verify_repo.sh`
 
@@ -67,8 +77,8 @@ If changing messaging:
 
 ## Known Gaps (Not Implemented)
 
-- Orders integration (consumer/movements/reservations/FEFO consumption)
+- Orders served consumption and FEFO batch depletion
 - AuthN/Z token validation details
-- Persistent event deduplication/idempotency store
-- Retry/backoff and dead-letter queues
+- Dead-letter queues and processing retries
 - Stock movements audit entity
+- Shared/distributed reservation cache

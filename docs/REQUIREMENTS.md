@@ -135,7 +135,7 @@ La columna **Estado** indica si la capacidad está implementada (`Implementado`)
 | RF-RECIPE-05 | El sistema debe calcular el máximo de porciones preparables y el costo estimado de producción por porción.                  | Implementado |
 | RF-RECIPE-06 | El sistema debe permitir filtrar recetas por disponibilidad.                                                                | Implementado |
 | RF-RECIPE-07 | El sistema debe recalcular la disponibilidad de las recetas afectadas cuando cambie el stock de un item.                    | Implementado |
-| RF-RECIPE-08 | El cálculo de disponibilidad debe basarse en stock disponible, no en stock total, una vez habilitadas las reservas.         | Considerado  |
+| RF-RECIPE-08 | El cálculo de disponibilidad debe basarse en stock disponible, no en stock total, una vez habilitadas las reservas.         | Implementado |
 
 ### 5.7 Movimientos de inventario
 
@@ -153,26 +153,26 @@ La columna **Estado** indica si la capacidad está implementada (`Implementado`)
 
 | ID        | Requisito                                                                                                                  | Estado      |
 | --------- | -------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| RF-RES-01 | El sistema debe reservar stock cuando el microservicio de Órdenes solicite apartar ingredientes para una orden o platillo. | Considerado |
-| RF-RES-02 | Una reserva debe identificar la orden o referencia externa, los items, las cantidades y su estado.                         | Considerado |
-| RF-RES-03 | La reserva debe incrementar el stock reservado sin modificar el stock total ni consumir lotes definitivamente.             | Considerado |
-| RF-RES-04 | Una reserva puede confirmarse, consumirse, liberarse o expirar según los eventos recibidos de Órdenes.                     | Considerado |
-| RF-RES-05 | La liberación o expiración de una reserva debe devolver el stock a disponible de forma consistente.                        | Considerado |
+| RF-RES-01 | El sistema debe reservar stock cuando el microservicio de Órdenes solicite apartar ingredientes para una orden o platillo. | Implementado |
+| RF-RES-02 | Una reserva debe identificar la orden o referencia externa, los items, las cantidades y su estado.                         | Implementado |
+| RF-RES-03 | La reserva debe incrementar el stock reservado sin modificar el stock total ni consumir lotes definitivamente.             | Implementado |
+| RF-RES-04 | Una reserva puede confirmarse, consumirse, liberarse o expirar según los eventos recibidos de Órdenes.                     | Parcialmente implementado |
+| RF-RES-05 | La liberación o expiración de una reserva debe devolver el stock a disponible de forma consistente.                        | Implementado |
 | RF-RES-06 | El consumo de una reserva debe descontar stock de los lotes aplicando FEFO y registrar los movimientos correspondientes.   | Considerado |
-| RF-RES-07 | El sistema debe rechazar o reportar reservas que excedan el stock disponible, sin dejar estados parciales inconsistentes.  | Considerado |
-| RF-RES-08 | Las reservas deben ser idempotentes respecto a la referencia externa de la orden.                                          | Considerado |
+| RF-RES-07 | El sistema debe rechazar o reportar reservas que excedan el stock disponible, sin dejar estados parciales inconsistentes.  | Implementado |
+| RF-RES-08 | Las reservas deben ser idempotentes respecto a la referencia externa de la orden.                                          | Implementado |
 
 ### 5.9 Integración con Órdenes
 
 | ID        | Requisito                                                                                                                                        | Estado      |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------- |
-| RF-ORD-01 | Inventario debe consumir eventos publicados por el microservicio de Órdenes para apartar, consumir, liberar o ajustar stock.                     | Considerado |
-| RF-ORD-02 | Los eventos de Órdenes deben procesarse de forma asíncrona y tolerante a reintentos sin duplicar efectos.                                        | Considerado |
+| RF-ORD-01 | Inventario debe consumir eventos publicados por el microservicio de Órdenes para apartar, consumir, liberar o ajustar stock.                     | Parcialmente implementado |
+| RF-ORD-02 | Los eventos de Órdenes deben procesarse de forma asíncrona y tolerante a reintentos sin duplicar efectos.                                        | Parcialmente implementado |
 | RF-ORD-03 | El consumo definitivo de stock debe originarse cuando la orden o el platillo se confirme como servido, según el contrato acordado con Órdenes.   | Considerado |
-| RF-ORD-04 | La cancelación o rechazo de una orden debe liberar las reservas asociadas.                                                                       | Considerado |
-| RF-ORD-05 | Los eventos deben incluir una referencia única e idempotente de la orden y de la operación solicitada.                                           | Considerado |
-| RF-ORD-06 | Inventario debe publicar el resultado de las operaciones que Órdenes necesite conocer, al menos cuando una reserva o consumo no pueda aplicarse. | Considerado |
-| RF-ORD-07 | Los contratos de eventos entre Inventario y Órdenes deben estar versionados y documentados antes de su implementación.                           | Considerado |
+| RF-ORD-04 | La cancelación o rechazo de una orden debe liberar las reservas asociadas.                                                                       | Implementado |
+| RF-ORD-05 | Los eventos deben incluir una referencia única e idempotente de la orden y de la operación solicitada.                                           | Implementado |
+| RF-ORD-06 | Inventario debe publicar el resultado de las operaciones que Órdenes necesite conocer, al menos cuando una reserva o consumo no pueda aplicarse. | Implementado |
+| RF-ORD-07 | Los contratos de eventos entre Inventario y Órdenes deben estar versionados y documentados antes de su implementación.                           | Parcialmente implementado |
 
 ### 5.10 Notificación proactiva de indisponibilidad
 
@@ -194,9 +194,9 @@ La columna **Estado** indica si la capacidad está implementada (`Implementado`)
 | RF-EVT-02 | El sistema debe publicar cambios de disponibilidad de recetas en el exchange de inventario.                                                          | Implementado |
 | RF-EVT-03 | El sistema debe operar aunque el broker no esté disponible, sin impedir el arranque ni las operaciones de negocio.                                   | Implementado |
 | RF-EVT-04 | El sistema debe confirmar (`ack`) los mensajes procesados y rechazar sin reencolar los que fallen de forma definitiva.                               | Implementado |
-| RF-EVT-05 | El sistema debe aplicar reintentos con backoff ante fallas transitorias del broker o del procesamiento, y disponer de una cola de mensajes fallidos. | Considerado  |
-| RF-EVT-06 | Los eventos deben incluir metadatos suficientes para trazabilidad e idempotencia.                                                                    | Considerado  |
-| RF-EVT-07 | El sistema debe poder suscribirse a los eventos de Órdenes en una cola propia del dominio de inventario.                                             | Considerado  |
+| RF-EVT-05 | El sistema debe aplicar reintentos con backoff ante fallas transitorias del broker o del procesamiento, y disponer de una cola de mensajes fallidos. | Parcialmente implementado |
+| RF-EVT-06 | Los eventos deben incluir metadatos suficientes para trazabilidad e idempotencia.                                                                    | Implementado |
+| RF-EVT-07 | El sistema debe poder suscribirse a los eventos de Órdenes en una cola propia del dominio de inventario.                                             | Implementado |
 
 ### 5.12 API y operación
 
@@ -292,7 +292,11 @@ La columna **Estado** indica si la capacidad está implementada (`Implementado`)
 - Cálculo de disponibilidad, porciones máximas y costo de producción.
 - Consumo de eventos de Menú para alta de recetas.
 - Publicación de cambios de disponibilidad de recetas.
-- Broker opcional y operación tolerante a fallos de conexión.
+- Consumo de eventos de Órdenes y reservas de stock Fase 1 (crear, confirmar, liberar, expirar, consultar).
+- Publicación de resultados de reservas para Órdenes.
+- Caché de lectura en memoria para reservas pendientes.
+- Idempotencia persistente de eventos de Órdenes por `eventId`.
+- Broker opcional, reconexión con backoff y operación tolerante a fallos de conexión.
 - API documentada con OpenAPI, validación global y CORS configurable.
 - Endpoint de reset restringido por ambiente.
 - Pruebas unitarias, e2e, lint y CI.
@@ -300,15 +304,13 @@ La columna **Estado** indica si la capacidad está implementada (`Implementado`)
 ### 8.2 Considerado y aún no implementado
 
 - Autenticación y autorización mediante token del API Gateway.
-- Integración con eventos del microservicio de Órdenes.
+- Consumo definitivo de stock al recibir una orden servida.
 - Entidad y registro de movimientos de inventario.
-- Reservas de stock y su ciclo de vida.
 - Descuento automático de stock por consumo de órdenes.
 - Aplicación de FEFO en salidas.
 - Vencimiento automático de lotes y generación de mermas.
 - Notificación proactiva `Inventario.Receta.NoDisponible`.
-- Reintentos con backoff y cola de mensajes fallidos.
-- Idempotencia persistente de eventos.
+- Reintentos de procesamiento y cola de mensajes fallidos.
 - Formato uniforme de errores en toda la API.
 
 ## 9. Criterios de aceptación generales
@@ -332,6 +334,6 @@ La columna **Estado** indica si la capacidad está implementada (`Implementado`)
 - El API Gateway es la fuente de verdad para autenticación y permisos.
 - El microservicio de Órdenes es la fuente de verdad del ciclo de vida de las órdenes.
 - El contrato definitivo de eventos entre Órdenes e Inventario aún debe acordarse y versionarse.
-- La política de expiración de reservas debe definirse junto con Órdenes.
-- La estrategia de consistencia entre MongoDB y RabbitMQ debe definirse antes de implementar movimientos y reservas.
+- La política definitiva de expiración de reservas debe confirmarse con Órdenes; Fase 1 usa TTL configurable.
+- La consistencia entre MongoDB y RabbitMQ se resuelve con idempotencia persistente y compensación; el outbox sigue pendiente.
 - El esquema actual de eventos de Menú es provisional.

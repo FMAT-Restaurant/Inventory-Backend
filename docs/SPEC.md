@@ -63,6 +63,8 @@ MongoDB
 | `BatchModule`     | Lotes, vencimientos, stock y costo promedio.                        |
 | `SuppliersModule` | Catálogo de proveedores.                                            |
 | `RecipeModule`    | Recetas, disponibilidad, porciones, costo y publicación de eventos. |
+| `ReservationModule` | Reservas de stock, caché de consultas, expiración y eventos de Órdenes. |
+| `ProcessedEventModule` | Idempotencia persistente de eventos consumidos.                 |
 | `TestModule`      | Reset de base de datos restringido a dev/QA.                        |
 
 ### 4.2 Dominios considerados
@@ -71,8 +73,7 @@ MongoDB
 | -------------------------- | ------------------------------------------------------------------------------------ |
 | Autenticación/Autorización | Validación del token del gateway y verificación de permisos.                         |
 | Movimientos                | Registro auditable de entradas, salidas, ajustes, consumos, mermas y compensaciones. |
-| Reservas                   | Compromiso temporal de stock para órdenes.                                           |
-| Integración con Órdenes    | Consumo de eventos de órdenes para reservar, consumir, liberar y ajustar stock.      |
+| Consumo de órdenes servidas | Consumir reservas confirmadas y descontar lotes aplicando FEFO.                     |
 | FEFO                       | Selección de lotes por vencimiento más próximo en toda salida.                       |
 | Notificaciones             | Evaluación de impacto y emisión de `Inventario.Receta.NoDisponible`.                 |
 
@@ -87,14 +88,14 @@ MongoDB
 | `Supplier`   | Proveedor con datos de contacto.                                                                      |
 | `Recipe`     | Receta de un platillo identificada por `plateId`, compuesta por items y cantidades requeridas.        |
 | `RecipeItem` | Relación item-cantidad dentro de una receta.                                                          |
+| `StockReservation` | Reserva de stock asociada a una orden, con estado, items, cantidades y vigencia.              |
+| `ProcessedEvent` | Registro único por consumidor y `eventId` para idempotencia persistente.                        |
 
 ### 5.2 Entidades consideradas
 
 | Entidad            | Propósito                                                                                   |
 | ------------------ | ------------------------------------------------------------------------------------------- |
-| `StockMovement`    | Movimiento auditable de stock con tipo, cantidad, lote, origen, referencia externa y actor. |
-| `StockReservation` | Reserva de stock asociada a una orden o referencia externa, con estado y vigencia.          |
-| `ProcessedEvent`   | Registro de eventos procesados para garantizar idempotencia.                                |
+| `StockMovement` | Movimiento auditable de stock con tipo, cantidad, lote, origen, referencia externa y actor. |
 
 ### 5.3 Reglas de stock
 
@@ -126,6 +127,9 @@ MongoDB
 | `/batches`        | Crear, listar, obtener, actualizar y eliminar.                              |
 | `/suppliers`      | Crear, listar, obtener, actualizar y eliminar.                              |
 | `/recipes`        | Registrar/actualizar por `plateId`, listar, obtener, actualizar y eliminar. |
+| `/reservations`   | Listar reservas por estado, orden o item.                                   |
+| `/reservations/:orderId` | Consultar la reserva de una orden.                                   |
+| `/reservations/pending/summary` | Resumir cantidades pendientes por item.                          |
 | `/apo/test/reset` | Reset de base de datos en dev/QA.                                           |
 
 El contrato detallado de cada endpoint se mantiene en `openapi.yml` y en los DTOs de cada módulo.
@@ -135,7 +139,6 @@ El contrato detallado de cada endpoint se mantiene en `openapi.yml` y en los DTO
 | Recurso                  | Propósito                                                                     |
 | ------------------------ | ----------------------------------------------------------------------------- |
 | `/movements`             | Consulta de movimientos de inventario.                                        |
-| `/reservations`          | Consulta y administración de reservas.                                        |
 | Endpoints de integración | Operaciones internas invocadas por otros servicios, si el diseño lo requiere. |
 
 ### 6.4 Códigos de error esperados
@@ -195,24 +198,25 @@ El contrato detallado de cada endpoint se mantiene en `openapi.yml` y en los DTO
 | Cola de items      | `cola_item_events`                                               |
 | Cola de lotes      | `cola_batch_events`                                              |
 
-### 8.3 Integración considerada con Órdenes
+### 8.3 Integración con Órdenes (Fase 1)
 
-Órdenes será el microservicio que solicite apartar, consumir, liberar o ajustar stock. Inventario debe consumir sus eventos en una cola propia del dominio.
+Órdenes solicita apartar, confirmar, liberar o ajustar stock. Inventario consume sus eventos en una cola propia y publica el resultado de cada operación.
 
-| Aspecto                | Definición general                                                                                 |
-| ---------------------- | -------------------------------------------------------------------------------------------------- |
-| Exchange esperado      | Un exchange propio de Órdenes, por confirmar.                                                      |
-| Eventos esperados      | Creación de orden, reserva solicitada, orden servida/consumida, cancelación, liberación y ajustes. |
-| Cola de Inventario     | Cola exclusiva para eventos de órdenes.                                                            |
-| Idempotencia           | Por identificador único de orden y de operación.                                                   |
-| Orden de procesamiento | Debe tolerarse reentrega y, cuando aplique, eventos fuera de orden.                                |
-| Respuesta              | Inventario debe publicar el resultado o error de negocio que Órdenes necesite conocer.             |
+| Aspecto                | Valor actual                                                                                             |
+| ---------------------- | -------------------------------------------------------------------------------------------------------- |
+| Exchange consumido     | `ordenes.topic` (provisional, por confirmar con Órdenes).                                                |
+| Eventos consumidos     | `ordenes.order.created`, `ordenes.order.confirmed`, `ordenes.order.cancelled`, `ordenes.order.served`.   |
+| Cola de Inventario     | `cola_orders_events` (durable).                                                                          |
+| Exchange publicado     | `inventory.topic`.                                                                                       |
+| Resultados publicados  | `inventory.reservation.confirmed`, `.rejected`, `.released`, `.expired`.                                 |
+| Idempotencia           | Persistente por `consumer + eventId`; reservas idempotentes por `orderId`.                               |
+| Orden de procesamiento | Se tolera reentrega; `served` se registra pero el consumo FEFO queda para Fase 2.                        |
 
-Los nombres definitivos de exchanges, routing keys y payloads deben acordarse y versionarse antes de implementar la integración.
+Los nombres definitivos de exchanges, routing keys y payloads deben acordarse y versionarse con Órdenes antes de producción.
 
-### 8.4 Envelope de evento considerado
+### 8.4 Envelope de evento actual
 
-Todo evento debería incluir, como mínimo:
+Los eventos de Órdenes incluyen, como mínimo:
 
 - Identificador del evento.
 - Tipo o routing key.
@@ -228,8 +232,9 @@ Todo evento debería incluir, como mínimo:
 - Los errores definitivos se rechazan sin reencolar para evitar bucles.
 - Los errores transitorios deben reintentarse con backoff.
 - Los mensajes agotados deben enviarse a una cola de mensajes fallidos.
-- Los consumidores deben ser idempotentes.
+- Los consumidores deben ser idempotentes (`processed_events`).
 - La caída del broker no debe impedir el arranque ni las operaciones HTTP.
+- El publisher y el consumer reconectan con backoff y el consumer restaura sus suscripciones.
 
 ## 9. Movimientos, reservas y FEFO
 
@@ -255,15 +260,15 @@ Reglas generales:
 
 ### 9.2 Reservas
 
-Una reserva compromete stock sin consumirlo. Debe poder:
+Una reserva compromete stock sin consumirlo. En Fase 1 puede:
 
-- Crearse a partir de una orden.
+- Crearse a partir de un evento de orden.
 - Consultarse por orden o referencia externa.
-- Confirmarse y convertirse en consumo.
+- Confirmarse.
 - Liberarse por cancelación.
-- Expirar según la política acordada con Órdenes.
+- Expirar por TTL configurable (`RESERVATION_TTL_MINUTES`, default 30).
 
-La reserva afecta `reservedStock`; el consumo afecta lotes y `totalStock`.
+La reserva afecta `reservedStock`; el consumo definitivo de lotes y `totalStock` queda para Fase 2. Las consultas usan una caché de lectura en memoria con TTL (`RESERVATION_CACHE_TTL_MS`, default 30s) que se invalida en cada mutación.
 
 ### 9.3 FEFO
 
@@ -302,6 +307,10 @@ La evaluación debe limitarse a las recetas que usan el item afectado, no debe e
 | `FRONTEND_URL`                 | Orígenes permitidos por CORS, separados por comas. |
 | `RABBITMQ_URL`                 | Conexión a RabbitMQ.                               |
 | `RABBITMQ_ENABLED`             | Permite deshabilitar el broker explícitamente.     |
+| `RESERVATION_TTL_MINUTES`      | Vigencia de reservas pendientes; `0` desactiva la expiración. |
+| `RESERVATION_SWEEP_INTERVAL_MS` | Intervalo del barrido de expiración; `0` lo desactiva. |
+| `RESERVATION_CACHE_TTL_MS`     | TTL de la caché de reservas en memoria.            |
+| `RESERVATION_CACHE_ENABLED`    | Permite desactivar la caché (`false`).             |
 | `MONGO_INITDB_*`               | Credenciales y base inicial de MongoDB en Compose. |
 | `APP_HOST_PORT`                | Puerto publicado por Compose en desarrollo.        |
 | `APP_VERSION`                  | Versión mostrada en OpenAPI y releases.            |
@@ -357,7 +366,9 @@ npm run openapi:generate
 - Cálculo de stock disponible, estado, disponibilidad, porciones y costo.
 - Sincronización de stock y costo desde lotes.
 - Consumo de eventos de Menú y publicación de disponibilidad.
-- Broker opcional.
+- Consumo de eventos de Órdenes y reservas de stock Fase 1.
+- Idempotencia persistente de eventos y caché de reservas.
+- Broker opcional y reconexión con backoff.
 - API documentada, validación global y CORS.
 - Reset restringido por ambiente.
 - Pruebas, lint y CI.
@@ -365,20 +376,18 @@ npm run openapi:generate
 ### Considerado, no implementado
 
 - Validación del token del gateway y permisos.
-- Integración con Órdenes.
+- Consumo de órdenes servidas y descuento FEFO de lotes.
 - Movimientos de inventario.
-- Reservas y su ciclo de vida.
 - FEFO y vencimiento automático de lotes.
 - Notificación proactiva de indisponibilidad.
-- Reintentos con backoff y cola de mensajes fallidos.
-- Idempotencia persistente de eventos.
+- Reintentos de procesamiento y cola de mensajes fallidos.
 - Formato uniforme de errores.
 
 ### Decisiones abiertas
 
-- Contrato definitivo de eventos entre Órdenes e Inventario.
+- Contrato definitivo de eventos entre Órdenes e Inventario (actualmente provisional).
 - Mecanismo de validación del token y catálogo de permisos.
-- Política de expiración de reservas.
+- Política definitiva de expiración de reservas (Fase 1 usa TTL configurable).
 - Estrategia de consistencia entre MongoDB y RabbitMQ.
 - Necesidad de un outbox o patrón equivalente para publicación confiable.
 - Versión y evolución de los contratos de eventos.

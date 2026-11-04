@@ -13,27 +13,59 @@ import {
   resolveBrokerUrl,
 } from './broker-connection.js';
 
+export interface ConsumeQueueOptions {
+  durable?: boolean;
+}
+
+const MIN_RECONNECT_DELAY_MS = 1000;
+const MAX_RECONNECT_DELAY_MS = 30000;
+
 @Injectable()
 export class EventConsumer implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(EventConsumer.name);
   private connection: amqp.ChannelModel | null = null;
   private channel: amqp.Channel | null = null;
   private initPromise: Promise<void> | null = null;
+  private connectPromise: Promise<void> | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private reconnectAttempt = 0;
+  private stopped = false;
   // Un registro de suscripciones por cola (una cola por dominio suscriptor)
   private readonly registries = new Map<string, EventSubscriptions>();
+  private readonly queueOptions = new Map<string, ConsumeQueueOptions>();
   // Colas que ya tienen su consumidor activo (evita consumidores competidores)
   private readonly consumingQueues = new Set<string>();
   private brokerUrl: string;
 
   async onModuleInit() {
+    this.stopped = false;
     this.initPromise = this.connect();
     await this.initPromise;
   }
 
-  private async connect() {
+  private async connect(): Promise<void> {
+    if (this.stopped) {
+      return;
+    }
+
+    if (this.connectPromise) {
+      return this.connectPromise;
+    }
+
+    this.connectPromise = this.doConnect();
+    try {
+      await this.connectPromise;
+    } finally {
+      this.connectPromise = null;
+    }
+  }
+
+  private async doConnect(): Promise<void> {
     try {
       if (process.env.RABBITMQ_ENABLED === 'false') {
-        this.logger.warn('RabbitMQ deshabilitado (RABBITMQ_ENABLED=false), omitiendo EventConsumer.');
+        this.logger.warn(
+          'RabbitMQ deshabilitado (RABBITMQ_ENABLED=false), omitiendo EventConsumer.',
+        );
         return;
       }
       this.brokerUrl = resolveBrokerUrl();
@@ -51,10 +83,11 @@ export class EventConsumer implements OnModuleInit, OnModuleDestroy {
         this.logger,
         connection,
         channel,
-        () => {
-          this.channel = null;
-        },
+        () => this.handleDisconnect(),
       );
+
+      this.reconnectAttempt = 0;
+      await this.restoreSubscriptions();
 
       this.logger.log(
         '✅ EventConsumer conectado y canal creado exitosamente.',
@@ -64,7 +97,111 @@ export class EventConsumer implements OnModuleInit, OnModuleDestroy {
         '⚠️ No se pudo conectar EventConsumer con RabbitMQ, continuando sin broker:',
         (error as Error)?.message,
       );
+      this.scheduleReconnect();
     }
+  }
+
+  private handleDisconnect(): void {
+    this.channel = null;
+    this.connection = null;
+    this.consumingQueues.clear();
+    this.scheduleReconnect();
+  }
+
+  private scheduleReconnect(): void {
+    if (this.stopped || this.reconnectTimer) {
+      return;
+    }
+
+    const delay = Math.min(
+      MAX_RECONNECT_DELAY_MS,
+      MIN_RECONNECT_DELAY_MS * 2 ** Math.min(this.reconnectAttempt, 5),
+    );
+    this.reconnectAttempt += 1;
+
+    this.logger.warn(
+      `⏳ Reintentando conexión con RabbitMQ en ${delay} ms (intento ${this.reconnectAttempt}).`,
+    );
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connect();
+    }, delay);
+    // No mantener vivo el proceso por un reintento pendiente.
+    this.reconnectTimer.unref?.();
+  }
+
+  private async restoreSubscriptions(): Promise<void> {
+    for (const [queueName, registry] of this.registries) {
+      await this.bindQueue(queueName, registry);
+      await this.startConsumer(queueName);
+    }
+  }
+
+  private async bindQueue(
+    queueName: string,
+    registry: EventSubscriptions,
+    keysToSkip: Set<string> = new Set<string>(),
+  ): Promise<void> {
+    if (!this.channel) {
+      return;
+    }
+
+    const options = this.queueOptions.get(queueName) ?? { durable: false };
+    await this.channel.assertQueue(queueName, {
+      durable: options.durable ?? false,
+    });
+
+    for (const { exchange, routingKey } of registry.all) {
+      const key = `${exchange}::${routingKey}`;
+      if (keysToSkip.has(key)) {
+        continue;
+      }
+
+      await this.channel.assertExchange(exchange, 'topic', { durable: true });
+      await this.channel.bindQueue(queueName, exchange, routingKey);
+      this.logger.log(
+        `📥 [Subscribe] Cola '${queueName}' vinculada a '${exchange}' con patrón '${routingKey}'`,
+      );
+    }
+  }
+
+  private async startConsumer(queueName: string): Promise<void> {
+    if (!this.channel || this.consumingQueues.has(queueName)) {
+      return;
+    }
+
+    this.consumingQueues.add(queueName);
+    this.channel
+      .consume(
+        queueName,
+        (msg) => {
+          if (!msg || !msg.content) {
+            return;
+          }
+
+          const routingKey = msg.fields.routingKey;
+          let content: any;
+          try {
+            content = JSON.parse(msg.content.toString());
+          } catch {
+            content = msg.content.toString();
+          }
+
+          this.logger.log(
+            `🎯 [Mensaje Capturado] Routing key: '${routingKey}' -> cola '${queueName}'`,
+          );
+
+          void this.dispatch(queueName, content, routingKey, msg);
+        },
+        { noAck: false },
+      )
+      .catch((error) => {
+        this.logger.error(
+          `❌ No se pudo iniciar el consumo de la cola '${queueName}':`,
+          error,
+        );
+      });
   }
 
   async consume(
@@ -142,85 +279,43 @@ export class EventConsumer implements OnModuleInit, OnModuleDestroy {
   async consumeSubscriptions(
     subscriptions: EventSubscriptions,
     queueName = 'cola_customer',
+    options: ConsumeQueueOptions = {},
   ): Promise<void> {
     if (this.initPromise) {
       await this.initPromise;
     }
 
-    if (!this.channel) {
-      throw new Error(
-        'El canal de RabbitMQ no está inicializado en el Consumer.',
-      );
-    }
-
-    // 1. Aseguramos la cola del dominio
-    await this.channel.assertQueue(queueName, { durable: false });
-
-    // 2. Registro previo de esta cola (si ya existe, combinamos)
+    // Registro previo de esta cola (si ya existe, combinamos). El registro se
+    // conserva aunque el broker esté caído para re-suscribirse al reconectar.
     const registry =
       this.registries.get(queueName) ?? new EventSubscriptions();
     const existingKeys = new Set(
       registry.all.map((s) => `${s.exchange}::${s.routingKey}`),
     );
-
-    // 3. Vinculamos la cola a cada exchange + patrón de routing key nuevo
-    for (const { exchange, routingKey } of subscriptions.all) {
-      await this.channel.assertExchange(exchange, 'topic', { durable: true });
-
-      const key = `${exchange}::${routingKey}`;
-      if (!existingKeys.has(key)) {
-        await this.channel.bindQueue(queueName, exchange, routingKey);
-        this.logger.log(
-          `📥 [Subscribe] Cola '${queueName}' vinculada a '${exchange}' con patrón '${routingKey}'`,
-        );
-      }
-    }
-
-    // 4. Actualizamos el registro de suscripciones de la cola
     registry.merge(subscriptions);
     this.registries.set(queueName, registry);
+    this.queueOptions.set(queueName, {
+      durable: options.durable ?? false,
+    });
 
-    // 5. Un solo consumidor por cola (si ya estaba consumiéndose, no repetimos)
-    if (this.consumingQueues.has(queueName)) {
-      this.logger.log(
-        `🔁 [Subscribe] Cola '${queueName}' ya estaba siendo consumida; solo se actualizaron sus suscripciones.`,
+    if (!this.channel) {
+      this.logger.warn(
+        `⚠️ Broker no disponible; la cola '${queueName}' quedará registrada para reconectar.`,
       );
+      this.scheduleReconnect();
       return;
     }
 
-    this.consumingQueues.add(queueName);
-    this.channel
-      .consume(
-        queueName,
-        (msg) => {
-          if (!msg || !msg.content) {
-            return;
-          }
-
-          const routingKey = msg.fields.routingKey;
-          let content: any;
-          try {
-            content = JSON.parse(msg.content.toString());
-          } catch {
-            content = msg.content.toString();
-          }
-
-          this.logger.log(
-            `🎯 [Mensaje Capturado] Routing key: '${routingKey}' -> cola '${queueName}'`,
-          );
-
-          void this.dispatch(queueName, content, routingKey, msg);
-        },
-        { noAck: false },
-      )
-      .catch((error) => {
-        // Si el canal se cae mientras espera la respuesta, amqplib rechaza la
-        // promesa y, sin este catch, se reporta como unhandled rejection.
-        this.logger.error(
-          `❌ No se pudo iniciar el consumo de la cola '${queueName}':`,
-          error,
-        );
-      });
+    try {
+      await this.bindQueue(queueName, subscriptions, existingKeys);
+      await this.startConsumer(queueName);
+    } catch (error) {
+      this.logger.error(
+        `❌ No se pudo suscribir la cola '${queueName}':`,
+        error,
+      );
+      this.handleDisconnect();
+    }
   }
 
   private async dispatch(
@@ -256,6 +351,11 @@ export class EventConsumer implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy() {
+    this.stopped = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     await closeBrokerConnection(this.channel, this.connection);
     this.logger.log('🔌 Conexión de EventConsumer cerrada.');
   }

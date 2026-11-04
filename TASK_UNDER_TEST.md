@@ -1,67 +1,68 @@
 # Task Under Test
 
-Change ID: CR-NOTIF-01
+Change ID: CR-ORD-01
 
 ## Goal
 
-Implement an asynchronous recipe-unavailability notification in the Inventory service.
+Implement Phase 1 of the Orders integration: reserve, confirm, release, expire, and query stock reservations, with a read-through in-memory cache for pending reservations.
 
-Whenever the available stock of an item decreases, evaluate every recipe that uses that item. If a recipe transitions from preparable to non-preparable, publish the logical event `Inventario.Receta.NoDisponible` through the inventory messaging conventions, including the affected plate and the limiting ingredient(s).
+Inventory must consume Orders events from its own queue, apply stock reservations idempotently, and publish the outcome so Orders can react. The service must keep working when RabbitMQ is unavailable and must resume consumption after reconnecting.
 
-Do not publish when:
-
-- the recipe remains preparable,
-- the item is not used by any registered recipe, or
-- the recipe was already unavailable before the stock reduction.
-
-Observe stock reductions through the existing item-stock update flow. Consuming `Ordenes.Orden.Servida` events, creating a stock-movement entity, and implementing FEFO consumption are out of scope for this change.
+Phase 2 (consuming a served order with FEFO, `StockMovement` audit rows, and batch depletion) is explicitly out of scope for this change.
 
 ## Requirements Covered
 
-- RF-NOTIF-01: Evaluate recipes that use an item when its available stock decreases.
-- RF-NOTIF-02: Emit `Inventario.Receta.NoDisponible` when a recipe transitions to non-preparable.
-- RF-NOTIF-03: Identify the affected plate, limiting ingredients, and timestamp.
-- RF-NOTIF-04: Emit one event per affected plate when several recipes share the item.
-- RF-NOTIF-05: Do not emit when the recipe remains preparable or the item has no recipe.
-- RF-NOTIF-06: Publish asynchronously without blocking the stock operation.
-- RF-NOTIF-07: Avoid repeated notifications while the recipe remains unavailable.
-- RF-EVT-03: Keep the service and business operation working when the broker is unavailable.
-- RF-EVT-05: Retry/backoff is a known gap; this change must at least not block or lose the business operation.
+- RF-RES-01..05, RF-RES-07, RF-RES-08: reservation creation, lifecycle, release/expiry, rejection without partial state, and idempotency by order reference.
+- RF-ORD-01, RF-ORD-02, RF-ORD-04..07: Orders consumer, async processing, cancellation releases, idempotent event references, and result publication.
+- RF-RECIPE-08: availability continues to use available stock (`totalStock - reservedStock`).
+- RF-EVT-03, RF-EVT-07: broker is optional and Orders events use a dedicated inventory queue.
 
-Acceptance scenarios are derived from `docs/REQUIREMENTS.md` §5.10 and `docs/SPEC.md` §10.2.
+`RF-RES-06` and `RF-ORD-03` remain pending for Phase 2.
+
+## Contract (Provisional)
+
+- Exchange: `ordenes.topic` (topic, durable).
+- Queue: `cola_orders_events` (durable).
+- Routing keys consumed: `ordenes.order.created`, `ordenes.order.confirmed`, `ordenes.order.cancelled`, `ordenes.order.served`.
+- Envelope: `eventId`, `version`, `occurredAt`, `correlationId?`, `orderId`, `items?`, `reason?`.
+- Routing keys published: `inventory.reservation.confirmed`, `inventory.reservation.rejected`, `inventory.reservation.released`, `inventory.reservation.expired`.
+- Result payload: `orderId`, `status`, `reason?`, `items?`, `timestamp`, plus correlation fields when available.
+
+The contract must be confirmed with the Orders team before production. `ordenes.order.served` is acknowledged in Phase 1 but does not consume stock yet.
+
+## Acceptance Scenarios
+
+- AC-01: `order.created` increments `reservedStock` atomically and publishes `inventory.reservation.confirmed`.
+- AC-02: insufficient stock publishes `inventory.reservation.rejected`, reserves nothing, and leaves no partial increments.
+- AC-03: `order.confirmed` moves a pending reservation to confirmed and publishes the result.
+- AC-04: `order.cancelled` releases the reserved stock and publishes `inventory.reservation.released`.
+- AC-05: pending reservations expire after the configured TTL and publish `inventory.reservation.expired`.
+- AC-06: duplicate `eventId` or repeated `orderId` does not apply the effect twice.
+- AC-07: a broker outage does not block startup or HTTP operations; the consumer reconnects and restores subscriptions.
+- AC-08: `GET /reservations`, `GET /reservations/:orderId`, and `GET /reservations/pending/summary` expose persisted reservations and pending reserved quantities.
 
 ## Verification
-
-Provide executable evidence for these scenarios:
-
-- AC-01 (transition to unavailable): a recipe that was preparable becomes non-preparable after an item stock reduction, and one event is published with the plate and limiting ingredient(s).
-- AC-02 (no recipe impact): reducing stock of an item that belongs to no recipe publishes no unavailability event.
-- AC-03 (multiple recipes): one item shared by several recipes produces one event per recipe that lost preparability.
-- AC-04 (still sufficient): a stock reduction that leaves enough stock publishes no event.
-- AC-05 (no duplicates): a second reduction while the recipe is already unavailable publishes no additional event.
-- AC-06 (broker unavailable): a publish failure is logged and does not fail the stock operation.
-
-Reference test cases: TC-12-01 through TC-12-05.
 
 Commands:
 
 - `npm run lint`
 - `npm test`
 - `npm run build`
-- If `scripts/verify_repo.sh` exists, run it as the repository verification contract.
+- `./scripts/verify_repo.sh`
+
+Evidence must include unit tests for reservation lifecycle, cache invalidation/TTL, item stock mutation, idempotency, and broker reconnection behavior.
 
 ## Constraints
 
 - Use `docs/REQUIREMENTS.md` and `docs/SPEC.md` as the source of truth.
-- Keep changes scoped to this task.
-- Do not redefine requirements in this file.
-- Do not add an Orders consumer, stock-movement entity, reservations, outbound FEFO consumption, or new dependencies.
-- Follow the existing event conventions instead of creating a parallel contract.
-- Do not modify generated artifacts, secrets, or environment files.
+- Keep changes scoped to Phase 1.
+- Do not add dependencies without approval.
+- Do not modify `openapi.yml`, `dist/`, or secrets.
+- Keep existing event shapes compatible and the broker optional.
 
 ## Non-Goals
 
-- Consuming `Ordenes.Orden.Servida`.
-- Persisting an auditable stock-movement history.
-- Implementing reservation lifecycle or FEFO consumption.
-- Adding a full retry/backoff and dead-letter infrastructure.
+- FEFO consumption and batch depletion on served orders.
+- `StockMovement` records for reservation lifecycle.
+- Dead-letter queues and full processing retry policy.
+- Replacing the in-memory cache with a shared cache.

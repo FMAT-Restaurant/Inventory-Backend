@@ -259,4 +259,54 @@ export class BatchService implements OnModuleInit {
       averageCost,
     );
   }
+
+  async consumeByFefo(
+    itemId: string,
+    quantityToConsume: number,
+    referenceId?: string,
+    reason = 'Consumo por orden servida',
+  ): Promise<void> {
+    if (!isValidObjectId(itemId) || !Number.isFinite(quantityToConsume) || quantityToConsume <= 0) {
+      return;
+    }
+
+    let remaining = Math.round(quantityToConsume * 1000) / 1000;
+    const batches = await this.batchModel
+      .find({ itemId })
+      .sort({ expirationDate: 1, _id: 1 })
+      .exec();
+
+    for (const batch of batches) {
+      if (remaining <= 0) {
+        break;
+      }
+      const status = this.computeStatus(batch.quantity, batch.expirationDate);
+      if (status === BatchStatus.EXPIRED) {
+        continue;
+      }
+      if ((status !== BatchStatus.ACTIVE && status !== BatchStatus.EXPIRES_TODAY) || batch.quantity <= 0) {
+        continue;
+      }
+
+      const take = Math.min(remaining, batch.quantity);
+      const newQuantity = Math.round((batch.quantity - take) * 1000) / 1000;
+      const newStatus = this.computeStatus(newQuantity, batch.expirationDate);
+
+      batch.quantity = newQuantity;
+      batch.status = newStatus;
+      await batch.save();
+
+      await this.recordMovementSafely({
+        batchId: String(batch._id),
+        movementType: StockMovementType.OUT,
+        quantity: take,
+        referenceId: referenceId ?? null,
+        reason,
+      });
+
+      remaining = Math.round((remaining - take) * 1000) / 1000;
+    }
+
+    await this.syncItemStockAndCost(itemId);
+  }
 }
