@@ -610,53 +610,30 @@ export class ReservationService {
     const invalid: any[] = [];
 
     for (const line of lines) {
-      const quantity = Number(line?.quantity ?? 0);
-      if (!Number.isFinite(quantity) || quantity <= 0) {
+      const quantity = this.normalizeLineQuantity(line?.quantity);
+      if (quantity === null) {
         invalid.push(line);
         continue;
       }
 
-      // Camino preferido: plateId -> expandir receta a items
-      if (line.plateId && line.plateId.trim().length > 0) {
-        try {
-          const recipe = await this.recipeModel
-            .findOne({ plateId: line.plateId.trim() })
-            .exec();
-          if (!recipe || !recipe.items || recipe.items.length === 0) {
-            invalid.push(line);
-            continue;
-          }
-          for (const recipeItem of recipe.items) {
-            const itemId = recipeItem.itemId?.toString();
-            if (!itemId || !isValidObjectId(itemId)) {
-              invalid.push(line);
-              continue;
-            }
-            const required = Number(recipeItem.requiredQuantity ?? 0);
-            if (!Number.isFinite(required) || required <= 0) {
-              invalid.push(line);
-              continue;
-            }
-            const totalQty = roundQuantity(required * quantity);
-            aggregated.set(
-              itemId,
-              roundQuantity((aggregated.get(itemId) ?? 0) + totalQty),
-            );
-          }
-          continue;
-        } catch (error) {
-          this.logger.error(
-            `Error al expandir plateId '${line.plateId}' a items:`,
-            error,
-          );
+      const plateId = this.getNonEmptyString(line?.plateId);
+      if (plateId) {
+        const expanded = await this.expandPlateIdToItems(plateId, quantity, line);
+        if (expanded === 'INVALID') {
           invalid.push(line);
           continue;
         }
+        for (const { itemId, totalQty } of expanded) {
+          aggregated.set(
+            itemId,
+            roundQuantity((aggregated.get(itemId) ?? 0) + totalQty),
+          );
+        }
+        continue;
       }
 
-      // Camino comentado/soportado: itemId directo (por si al final llegan ambos)
-      if (line.itemId && line.itemId.trim().length > 0) {
-        const itemId = line.itemId.trim();
+      const itemId = this.getNonEmptyString(line?.itemId);
+      if (itemId) {
         if (!isValidObjectId(itemId)) {
           invalid.push(line);
           continue;
@@ -678,6 +655,59 @@ export class ReservationService {
       })),
       invalid,
     };
+  }
+
+  private normalizeLineQuantity(value: unknown): number | null {
+    const quantity = Number(value ?? 0);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      return null;
+    }
+    return quantity;
+  }
+
+  private getNonEmptyString(value: unknown): string | undefined {
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  private async expandPlateIdToItems(
+    plateId: string,
+    quantity: number,
+    originalLine: unknown,
+  ): Promise<'INVALID' | Array<{ itemId: string; totalQty: number }>> {
+    try {
+      const recipe = await this.recipeModel
+        .findOne({ plateId })
+        .exec();
+
+      if (!recipe || !recipe.items || recipe.items.length === 0) {
+        return 'INVALID';
+      }
+
+      const expanded: Array<{ itemId: string; totalQty: number }> = [];
+      for (const recipeItem of recipe.items) {
+        const itemId = recipeItem.itemId?.toString();
+        if (!itemId || !isValidObjectId(itemId)) {
+          return 'INVALID';
+        }
+        const required = Number(recipeItem.requiredQuantity ?? 0);
+        if (!Number.isFinite(required) || required <= 0) {
+          return 'INVALID';
+        }
+        const totalQty = roundQuantity(required * quantity);
+        expanded.push({ itemId, totalQty });
+      }
+      return expanded;
+    } catch (error) {
+      this.logger.error(
+        `Error al expandir plateId '${plateId}' a items:`,
+        error,
+      );
+      return 'INVALID';
+    }
   }
 
   private aggregateItems(items: OrderEventItem[]): AggregatedItems {
@@ -814,35 +844,102 @@ export class ReservationService {
     items?: Array<{ plateId?: string; itemId?: string; quantity?: number }>;
     reason?: string;
   }): Promise<StockReservation | null> {
-    const orderId = input.orderId?.trim();
+    const orderId = this.normalizeOrderIdForConsume(input.orderId);
     if (!orderId) {
       return null;
     }
 
-    let reservation = await this.reservationModel.findOne({ orderId }).exec();
+    let reservation = await this.loadReservationForConsume(orderId);
     if (reservation?.status === ReservationStatus.CONSUMED) {
       return reservation;
     }
 
-    // Resolver líneas a items (preferir plateId, soportar itemId comentado)
+    const linesInput = this.getLinesInputForConsume(reservation, input.items);
     const { valid: itemsToConsume, invalid } = await this.resolveLinesToItems(
-      input.items ?? reservation?.items?.map((i) => ({ itemId: i.itemId.toString(), quantity: i.quantity })) ?? [],
+      linesInput,
     );
 
-    if (invalid.length > 0 && (!reservation || reservation.items.length === 0)) {
+    if (this.shouldAbortConsumeDueToInvalid(reservation, invalid)) {
       this.logger.warn(
         `No se pudo consumir orden servida '${orderId}': líneas inválidas`,
       );
-      return reservation;
+      return reservation ?? null;
     }
+
     if (itemsToConsume.length === 0) {
       this.logger.warn(
         `No se pudo consumir orden servida '${orderId}': sin items a consumir`,
       );
-      return reservation;
+      return reservation ?? null;
     }
 
-    // Consumir por FEFO desde lotes y generar movimientos
+    await this.consumeItemsByFefo(itemsToConsume, orderId);
+
+    reservation = await this.transitionReservationToConsumedIfNeeded(
+      reservation,
+      orderId,
+      input.reason,
+    );
+
+    await this.publishConsumedEvent(orderId, itemsToConsume, input);
+
+    return reservation;
+  }
+
+  private normalizeOrderIdForConsume(orderId?: string): string | null {
+    const trimmed = orderId?.trim();
+    return trimmed && trimmed.length > 0 ? trimmed : null;
+  }
+
+  private async loadReservationForConsume(
+    orderId: string,
+  ): Promise<StockReservation | null> {
+    const reservation = await this.reservationModel
+      .findOne({ orderId })
+      .exec();
+    if (reservation?.status === ReservationStatus.CONSUMED) {
+      return reservation;
+    }
+    return reservation ?? null;
+  }
+
+  private getLinesInputForConsume(
+    reservation: StockReservation | null,
+    itemsFromEvent?: Array<{
+      plateId?: string;
+      itemId?: string;
+      quantity?: number;
+    }>,
+  ): Array<{ plateId?: string; itemId?: string; quantity?: number }> {
+    if (itemsFromEvent && itemsFromEvent.length > 0) {
+      return itemsFromEvent;
+    }
+    if (reservation?.items && reservation.items.length > 0) {
+      return reservation.items.map((i) => ({
+        itemId: i.itemId.toString(),
+        quantity: Number(i.quantity),
+      }));
+    }
+    return [];
+  }
+
+  private shouldAbortConsumeDueToInvalid(
+    reservation: StockReservation | null,
+    invalid: any[],
+  ): boolean {
+    if (invalid.length === 0) {
+      return false;
+    }
+    if (!reservation || reservation.items.length === 0) {
+      return true;
+    }
+    return false;
+  }
+
+  private async consumeItemsByFefo(
+    itemsToConsume: AggregatedItem[],
+    orderId: string,
+  ): Promise<void> {
     for (const item of itemsToConsume) {
       try {
         await this.batchService.consumeByFefo(
@@ -858,39 +955,63 @@ export class ReservationService {
         );
       }
     }
+  }
 
-    if (reservation) {
-      if (
-        reservation.status === ReservationStatus.PENDING &&
-        reservation.expiresAt &&
-        reservation.expiresAt.getTime() <= Date.now()
-      ) {
-        await this.release(
-          orderId,
-          ReservationStatus.EXPIRED,
-          'Reserva expirada por TTL',
-        );
-        reservation = await this.reservationModel.findOne({ orderId }).exec();
-      }
-
-      if (reservation && reservation.status !== ReservationStatus.CONSUMED) {
-        // Liberar stock reservado ya que pasa a consumido
-        await this.releaseReservedItems(reservation);
-        const updated = await this.reservationModel
-          .findOneAndUpdate(
-            { orderId },
-            { status: ReservationStatus.CONSUMED, reason: input.reason ?? reservation.reason ?? null },
-            { new: true },
-          )
-          .exec();
-        reservation = updated;
-        this.cache.invalidateOrder(orderId);
-        if (reservation) {
-          this.cache.setOrder(orderId, reservation, null);
-        }
-      }
+  private async transitionReservationToConsumedIfNeeded(
+    reservation: StockReservation | null,
+    orderId: string,
+    reason?: string,
+  ): Promise<StockReservation | null> {
+    if (!reservation) {
+      return null;
     }
 
+    if (
+      reservation.status === ReservationStatus.PENDING &&
+      reservation.expiresAt &&
+      reservation.expiresAt.getTime() <= Date.now()
+    ) {
+      await this.release(
+        orderId,
+        ReservationStatus.EXPIRED,
+        'Reserva expirada por TTL',
+      );
+      reservation = await this.reservationModel.findOne({ orderId }).exec();
+    }
+
+    if (!reservation || reservation.status === ReservationStatus.CONSUMED) {
+      return reservation ?? null;
+    }
+
+    await this.releaseReservedItems(reservation);
+    const updated = await this.reservationModel
+      .findOneAndUpdate(
+        { orderId },
+        {
+          status: ReservationStatus.CONSUMED,
+          reason: reason ?? reservation.reason ?? null,
+        },
+        { new: true },
+      )
+      .exec();
+
+    reservation = updated;
+    this.cache.invalidateOrder(orderId);
+    if (reservation) {
+      this.cache.setOrder(orderId, reservation, null);
+    }
+    return reservation ?? null;
+  }
+
+  private async publishConsumedEvent(
+    orderId: string,
+    itemsToConsume: AggregatedItem[],
+    input: {
+      eventId: string;
+      correlationId?: string;
+      reason?: string;
+    },
+  ): Promise<void> {
     try {
       await this.publishResult(InventoryRoutingKeys.ReservationConsumed, {
         orderId,
@@ -909,8 +1030,6 @@ export class ReservationService {
         `No se pudo publicar '${InventoryRoutingKeys.ReservationConsumed}' para la orden '${orderId}': ${error}`,
       );
     }
-
-    return reservation;
   }
 
   private async publishResult(
