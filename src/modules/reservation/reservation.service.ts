@@ -91,35 +91,81 @@ export class ReservationService {
   async reserve(
     input: ReserveReservationInput,
   ): Promise<StockReservation | null> {
-    const orderId = input.orderId?.trim();
+    const orderId = this.normalizeOrderId(input.orderId);
     if (!orderId) {
       await this.publishRejected('', [], 'orderId es obligatorio');
       return null;
     }
 
-    const existing = await this.reservationModel.findOne({ orderId }).exec();
+    const existing = await this.getExistingOrExpire(orderId);
+    if (existing === 'EXPIRED') {
+      return null;
+    }
     if (existing) {
-      if (
-        existing.status === ReservationStatus.PENDING &&
-        existing.expiresAt &&
-        existing.expiresAt.getTime() <= Date.now()
-      ) {
-        return this.release(
-          orderId,
-          ReservationStatus.EXPIRED,
-          'Reserva expirada por TTL',
-        );
-      }
-
       this.logger.log(
         `🔁 Reserva duplicada ignorada para la orden '${orderId}' (estado '${existing.status}').`,
       );
       return existing;
     }
 
+    const items = await this.prepareValidItems(input, orderId);
+    if (!items) {
+      return null;
+    }
+
+    const itemDocs = await this.loadItemsOrReject(items, orderId);
+    if (!itemDocs) {
+      return null;
+    }
+
+    const ok = await this.ensureStockAvailable(items, itemDocs, orderId);
+    if (!ok) {
+      return null;
+    }
+
+    return this.executeReservation(items, orderId, input);
+  }
+
+  private normalizeOrderId(orderId?: string): string | null {
+    const trimmed = orderId?.trim();
+    return trimmed && trimmed.length > 0 ? trimmed : null;
+  }
+
+  private async getExistingOrExpire(
+    orderId: string,
+  ): Promise<StockReservation | null | 'EXPIRED'> {
+    const existing = await this.reservationModel.findOne({ orderId }).exec();
+    if (!existing) {
+      return null;
+    }
+
+    if (
+      existing.status === ReservationStatus.PENDING &&
+      existing.expiresAt &&
+      existing.expiresAt.getTime() <= Date.now()
+    ) {
+      const expired = await this.release(
+        orderId,
+        ReservationStatus.EXPIRED,
+        'Reserva expirada por TTL',
+      );
+      if (expired?.status === ReservationStatus.EXPIRED) {
+        return 'EXPIRED';
+      }
+      return expired ?? null;
+    }
+
+    return existing;
+  }
+
+  private async prepareValidItems(
+    input: ReserveReservationInput,
+    orderId: string,
+  ): Promise<AggregatedItem[] | null> {
     const { valid: items, invalid } = await this.resolveLinesToItems(
       (input.items as any[]) ?? [],
     );
+
     if (invalid.length > 0) {
       await this.publishRejected(
         orderId,
@@ -131,15 +177,29 @@ export class ReservationService {
       );
       return null;
     }
+
     if (items.length === 0) {
-      await this.publishRejected(orderId, [], 'La orden no contiene items válidos');
+      await this.publishRejected(
+        orderId,
+        [],
+        'La orden no contiene items válidos',
+      );
       return null;
     }
 
+    return items;
+  }
+
+  private async loadItemsOrReject(
+    items: AggregatedItem[],
+    orderId: string,
+  ): Promise<Map<string, Item> | null> {
     const itemDocs = new Map<string, Item>();
+
     for (const item of items) {
       try {
-        itemDocs.set(item.itemId, await this.itemService.findOne(item.itemId));
+        const doc = await this.itemService.findOne(item.itemId);
+        itemDocs.set(item.itemId, doc);
       } catch (error) {
         if (!(error instanceof NotFoundException)) {
           throw error;
@@ -160,25 +220,43 @@ export class ReservationService {
       }
     }
 
+    return itemDocs;
+  }
+
+  private async ensureStockAvailable(
+    items: AggregatedItem[],
+    itemDocs: Map<string, Item>,
+    orderId: string,
+  ): Promise<boolean> {
     const insufficient = items.filter(
       (item) =>
         availableStockOf(itemDocs.get(item.itemId) as Item) < item.quantity,
     );
-    if (insufficient.length > 0) {
-      await this.publishRejected(
-        orderId,
-        insufficient.map((item) => ({
-          itemId: item.itemId,
-          itemName: itemDocs.get(item.itemId)?.name,
-          requestedQuantity: item.quantity,
-          availableStock: availableStockOf(itemDocs.get(item.itemId) as Item),
-        })),
-        'Stock insuficiente para cubrir la reserva',
-      );
-      return null;
+
+    if (insufficient.length === 0) {
+      return true;
     }
 
+    await this.publishRejected(
+      orderId,
+      insufficient.map((item) => ({
+        itemId: item.itemId,
+        itemName: itemDocs.get(item.itemId)?.name,
+        requestedQuantity: item.quantity,
+        availableStock: availableStockOf(itemDocs.get(item.itemId) as Item),
+      })),
+      'Stock insuficiente para cubrir la reserva',
+    );
+    return false;
+  }
+
+  private async executeReservation(
+    items: AggregatedItem[],
+    orderId: string,
+    input: ReserveReservationInput,
+  ): Promise<StockReservation | null> {
     const reserved: AggregatedItem[] = [];
+
     try {
       for (const item of items) {
         const updated = await this.itemService.reserveStock(
@@ -191,8 +269,7 @@ export class ReservationService {
         reserved.push(item);
       }
 
-      const ttlMinutes =
-        input.ttlMinutes ?? resolveReservationTtlMinutes();
+      const ttlMinutes = input.ttlMinutes ?? resolveReservationTtlMinutes();
       const reservation = new this.reservationModel({
         orderId,
         items: items.map((item) => ({

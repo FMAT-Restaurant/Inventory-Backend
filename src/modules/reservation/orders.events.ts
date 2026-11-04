@@ -184,38 +184,55 @@ export class OrdersEvents implements OnModuleInit {
       return undefined;
     }
 
-    const items: OrderEventItem[] = [];
-    for (const raw of value) {
-      if (!raw || typeof raw !== 'object') {
-        continue;
-      }
-      const item = raw as Record<string, unknown>;
-      const quantity = Number(item.quantity);
-      if (!Number.isFinite(quantity) || quantity <= 0) {
-        continue;
-      }
+    const items = value
+      .map((raw) => this.parseItem(raw))
+      .filter((item): item is OrderEventItem => item !== null);
 
-      const plateId =
-        typeof item.plateId === 'string' && item.plateId.trim().length > 0
-          ? item.plateId.trim()
-          : undefined;
-      // TODO: mantener por compatibilidad si Órdenes envía itemId directamente
-      const itemIdDirect =
-        typeof item.itemId === 'string' && item.itemId.trim().length > 0
-          ? item.itemId.trim()
-          : undefined;
-
-      if (plateId) {
-        items.push({ plateId, quantity } as OrderEventItem);
-        continue;
-      }
-      if (itemIdDirect) {
-        // Camino comentado/soportado
-        items.push({ itemId: itemIdDirect, quantity } as OrderEventItem);
-        continue;
-      }
-    }
     return items.length > 0 ? items : undefined;
+  }
+
+  private parseItem(raw: unknown): OrderEventItem | null {
+    if (!this.isRecord(raw)) {
+      return null;
+    }
+
+    const quantity = this.toPositiveQuantity(raw.quantity);
+    if (quantity === null) {
+      return null;
+    }
+
+    const plateId = this.getNonEmptyString(raw.plateId);
+    if (plateId) {
+      return { plateId, quantity } as OrderEventItem;
+    }
+
+    const itemIdDirect = this.getNonEmptyString(raw.itemId);
+    if (itemIdDirect) {
+      // TODO: mantener por compatibilidad si Órdenes envía itemId directamente
+      return { itemId: itemIdDirect, quantity } as OrderEventItem;
+    }
+
+    return null;
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null;
+  }
+
+  private getNonEmptyString(value: unknown): string | undefined {
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  private toPositiveQuantity(value: unknown): number | null {
+    const quantity = Number(value);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      return null;
+    }
+    return quantity;
   }
 
   private asNonEmptyString(value: unknown): string | undefined {

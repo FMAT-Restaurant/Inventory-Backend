@@ -27,7 +27,7 @@ function roundQuantity(value: number): number {
 export class StockMovementService {
   constructor(
     @InjectModel(StockMovement.name)
-    private stockMovementModel: Model<StockMovement>,
+    private readonly stockMovementModel: Model<StockMovement>,
   ) {}
 
   async record(input: RecordStockMovementInput): Promise<StockMovement> {
@@ -38,9 +38,7 @@ export class StockMovementService {
 
     const quantity = roundQuantity(Number(input.quantity));
     if (!Number.isFinite(quantity) || Math.abs(quantity) > MAX_QUANTITY) {
-      throw new BadRequestException(
-        'La cantidad del movimiento es inválida',
-      );
+      throw new BadRequestException('La cantidad del movimiento es inválida');
     }
 
     if (input.movementType === StockMovementType.ADJUSTMENT) {
