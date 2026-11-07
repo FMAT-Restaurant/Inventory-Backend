@@ -1,16 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
-import { NotFoundException } from '@nestjs/common';
+import { Logger, NotFoundException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { RecipeService } from './recipe.service.js';
 import { Recipe } from './schemas/recipe.schema.js';
 import { ItemService } from '../item/item.service.js';
-import { ItemChangeEmitter } from '../item/item-change.emitter.js';
+import {
+  ITEM_CHANGED_EVENT,
+  ItemChangeEmitter,
+} from '../item/item-change.emitter.js';
 import { EventPublisher } from '../../broker/event-publisher.service.js';
 
 describe('RecipeService', () => {
   let service: RecipeService;
+  let emitter: ItemChangeEmitter;
 
   const mockExecFind = vi.fn();
   const mockExecFindOne = vi.fn();
@@ -57,6 +61,33 @@ describe('RecipeService', () => {
     Object.assign(this, dto);
     this._id = new Types.ObjectId(mockRecipeId);
     this.save = mockSave;
+  }
+
+  function buildRecipe(overrides: Record<string, unknown> = {}) {
+    return {
+      _id: new Types.ObjectId(mockRecipeId),
+      plateId: 'PLATE-001',
+      name: 'Hamburguesa',
+      items: [
+        {
+          itemId: new Types.ObjectId(mockItemId1),
+          requiredQuantity: 1,
+        },
+      ],
+      lastKnownAvailability: true,
+      save: mockSave,
+      ...overrides,
+    };
+  }
+
+  function getNotAvailableCalls() {
+    return mockPublisher.publish.mock.calls.filter(
+      ([, routingKey]) => routingKey === 'inventory.recipe.not-available',
+    );
+  }
+
+  async function flushAsync(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
   MockModel.find = vi.fn().mockReturnValue({ exec: mockExecFind });
   MockModel.findOne = vi.fn().mockReturnValue({ exec: mockExecFindOne });
@@ -107,6 +138,8 @@ describe('RecipeService', () => {
     }).compile();
 
     service = module.get<RecipeService>(RecipeService);
+    emitter = module.get<ItemChangeEmitter>(ItemChangeEmitter);
+    await service.onModuleInit();
   });
 
   it('debería estar definido', () => {
@@ -322,6 +355,170 @@ describe('RecipeService', () => {
         NotFoundException,
       );
       expect(MockModel.deleteOne).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('notificación de receta no disponible', () => {
+    it('publica el evento cuando la receta deja de ser preparable (AC-01)', async () => {
+      const recipe = buildRecipe();
+      mockExecFind.mockResolvedValue([recipe]);
+      mockItemService.findOne.mockResolvedValue({
+        ...item1,
+        availableStock: 0,
+        totalStock: 0,
+        stock: 0,
+      });
+
+      emitter.emit(ITEM_CHANGED_EVENT, {
+        itemId: mockItemId1,
+        action: 'updated',
+      });
+
+      await vi.waitFor(() => {
+        expect(mockPublisher.publish).toHaveBeenCalledWith(
+          'inventory.topic',
+          'inventory.recipe.not-available',
+          expect.objectContaining({
+            plateId: 'PLATE-001',
+            name: 'Hamburguesa',
+            limitingIngredients: [
+              expect.objectContaining({
+                itemId: mockItemId1,
+                itemName: 'Carne',
+                requiredQuantity: 1,
+                availableStock: 0,
+              }),
+            ],
+          }),
+        );
+      });
+
+      expect(recipe.lastKnownAvailability).toBe(false);
+    });
+
+    it('no publica si el item no pertenece a ninguna receta (AC-02)', async () => {
+      mockExecFind.mockResolvedValue([]);
+
+      emitter.emit(ITEM_CHANGED_EVENT, {
+        itemId: mockItemId1,
+        action: 'updated',
+      });
+
+      await flushAsync();
+
+      expect(mockPublisher.publish).not.toHaveBeenCalled();
+    });
+
+    it('publica un evento por cada receta afectada (AC-03)', async () => {
+      const recipeA = buildRecipe({
+        _id: new Types.ObjectId(),
+        plateId: 'PLATE-A',
+      });
+      const recipeB = buildRecipe({
+        _id: new Types.ObjectId(),
+        plateId: 'PLATE-B',
+      });
+      mockExecFind.mockResolvedValue([recipeA, recipeB]);
+      mockItemService.findOne.mockResolvedValue({
+        ...item1,
+        availableStock: 0,
+        totalStock: 0,
+        stock: 0,
+      });
+
+      emitter.emit(ITEM_CHANGED_EVENT, {
+        itemId: mockItemId1,
+        action: 'updated',
+      });
+
+      await vi.waitFor(() => {
+        const calls = getNotAvailableCalls();
+        expect(calls).toHaveLength(2);
+        expect(calls.map(([, , payload]) => payload.plateId)).toEqual(
+          expect.arrayContaining(['PLATE-A', 'PLATE-B']),
+        );
+      });
+    });
+
+    it('no publica si la receta sigue siendo preparable (AC-04)', async () => {
+      const recipe = buildRecipe();
+      mockExecFind.mockResolvedValue([recipe]);
+      mockItemService.findOne.mockResolvedValue({
+        ...item1,
+        availableStock: 5,
+        totalStock: 5,
+        stock: 5,
+      });
+
+      emitter.emit(ITEM_CHANGED_EVENT, {
+        itemId: mockItemId1,
+        action: 'updated',
+      });
+
+      await flushAsync();
+
+      expect(getNotAvailableCalls()).toHaveLength(0);
+      expect(recipe.lastKnownAvailability).toBe(true);
+    });
+
+    it('no publica duplicados mientras la receta sigue no disponible (AC-05)', async () => {
+      const recipe = buildRecipe();
+      mockExecFind.mockResolvedValue([recipe]);
+      mockItemService.findOne.mockResolvedValue({
+        ...item1,
+        availableStock: 0,
+        totalStock: 0,
+        stock: 0,
+      });
+
+      emitter.emit(ITEM_CHANGED_EVENT, {
+        itemId: mockItemId1,
+        action: 'updated',
+      });
+
+      await vi.waitFor(() => {
+        expect(getNotAvailableCalls()).toHaveLength(1);
+      });
+
+      emitter.emit(ITEM_CHANGED_EVENT, {
+        itemId: mockItemId1,
+        action: 'updated',
+      });
+
+      await flushAsync();
+
+      expect(getNotAvailableCalls()).toHaveLength(1);
+      expect(recipe.lastKnownAvailability).toBe(false);
+    });
+
+    it('registra el fallo de publicación sin fallar la operación (AC-06)', async () => {
+      const recipe = buildRecipe();
+      mockExecFind.mockResolvedValue([recipe]);
+      mockItemService.findOne.mockResolvedValue({
+        ...item1,
+        availableStock: 0,
+        totalStock: 0,
+        stock: 0,
+      });
+      mockPublisher.publish.mockRejectedValue(new Error('Broker caído'));
+      const warnSpy = vi
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
+
+      expect(() =>
+        emitter.emit(ITEM_CHANGED_EVENT, {
+          itemId: mockItemId1,
+          action: 'updated',
+        }),
+      ).not.toThrow();
+
+      await flushAsync();
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('inventory.recipe.not-available'),
+      );
+      expect(recipe.lastKnownAvailability).toBe(true);
+      warnSpy.mockRestore();
     });
   });
 });

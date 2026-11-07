@@ -18,7 +18,7 @@ services:
       MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME:?Define MONGO_INITDB_ROOT_USERNAME en .env}:${MONGO_INITDB_ROOT_PASSWORD:?Define MONGO_INITDB_ROOT_PASSWORD en .env}@db:27017/${MONGO_INITDB_DATABASE:?Define MONGO_INITDB_DATABASE en .env}?authSource=admin
       PORT: 8083
       NODE_ENV: ${NODE_ENV:-development}
-      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5176}
       RABBITMQ_URL: ${RABBITMQ_URL:?Define RABBITMQ_URL en .env}
     # Solo en dev se publica el puerto en el host. El puerto interno del
     # contenedor es 8083 en todos los ambientes: es el que espera el gateway.

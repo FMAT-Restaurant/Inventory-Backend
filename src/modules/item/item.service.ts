@@ -159,6 +159,109 @@ export class ItemService {
     return updated;
   }
 
+  /**
+   * Reserva stock de forma atómica solo si hay disponibilidad suficiente.
+   * Devuelve null cuando la cantidad solicitada excede el stock disponible.
+   */
+  async reserveStock(id: string, quantity: number): Promise<Item | null> {
+    if (!isValidObjectId(id)) {
+      throw new NotFoundException(`Item con id '${id}' no encontrado`);
+    }
+
+    const roundedQuantity = Math.round(quantity * 1000) / 1000;
+    if (!Number.isFinite(roundedQuantity) || roundedQuantity <= 0) {
+      throw new BadRequestException('La cantidad a reservar debe ser mayor a 0');
+    }
+
+    const updated = await this.itemModel
+      .findOneAndUpdate(
+        {
+          _id: id,
+          ...ACTIVE_ITEM_FILTER,
+          $expr: {
+            $gte: [
+              {
+                $subtract: [
+                  { $ifNull: ['$totalStock', 0] },
+                  { $ifNull: ['$reservedStock', 0] },
+                ],
+              },
+              roundedQuantity,
+            ],
+          },
+        },
+        { $inc: { reservedStock: roundedQuantity } },
+        { new: true },
+      )
+      .exec();
+
+    if (updated) {
+      this.changeEmitter.emit(ITEM_CHANGED_EVENT, {
+        itemId: id,
+        action: 'updated',
+      });
+    }
+
+    return updated ?? null;
+  }
+
+  /**
+   * Ajusta el stock reservado sin permitir valores negativos. Se usa para
+   * liberar reservas y para compensar operaciones parciales.
+   */
+  async adjustReservedStock(id: string, delta: number): Promise<Item> {
+    if (!isValidObjectId(id)) {
+      throw new NotFoundException(`Item con id '${id}' no encontrado`);
+    }
+
+    const roundedDelta = Math.round(delta * 1000) / 1000;
+    if (!Number.isFinite(roundedDelta) || roundedDelta === 0) {
+      return this.findOne(id);
+    }
+
+    const updated =
+      roundedDelta > 0
+        ? await this.itemModel
+            .findByIdAndUpdate(
+              id,
+              { $inc: { reservedStock: roundedDelta } },
+              { new: true },
+            )
+            .exec()
+        : await this.itemModel
+            .findOneAndUpdate(
+              {
+                _id: id,
+                $expr: {
+                  $gte: [
+                    { $ifNull: ['$reservedStock', 0] },
+                    Math.abs(roundedDelta),
+                  ],
+                },
+              },
+              { $inc: { reservedStock: roundedDelta } },
+              { new: true },
+            )
+            .exec();
+
+    if (!updated) {
+      const exists = await this.itemModel.exists({ _id: id }).exec();
+      if (!exists) {
+        throw new NotFoundException(`Item con id '${id}' no encontrado`);
+      }
+      throw new ConflictException(
+        `El item '${id}' no tiene suficiente stock reservado para liberar`,
+      );
+    }
+
+    this.changeEmitter.emit(ITEM_CHANGED_EVENT, {
+      itemId: id,
+      action: 'updated',
+    });
+
+    return updated;
+  }
+
   async remove(id: string): Promise<void> {
     if (!isValidObjectId(id)) {
       throw new NotFoundException(`Item con id '${id}' no encontrado`);

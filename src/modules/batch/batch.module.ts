@@ -6,14 +6,17 @@ import { Batch, BatchSchema } from './schemas/batch.schema.js';
 import { ItemsModule } from '../item/item.module.js';
 import { BatchEvents } from './batch.events.js';
 import { BrokerModule } from '../../broker/broker.module.js';
+import { StockMovementModule } from '../stock-movement/stock-movement.module.js';
 
 @Module({
   imports: [
     MongooseModule.forFeature([{ name: Batch.name, schema: BatchSchema }]),
     ItemsModule,
     BrokerModule,
+    StockMovementModule,
   ],
   controllers: [BatchController],
   providers: [BatchService, BatchEvents],
+  exports: [BatchService],
 })
 export class BatchModule {}

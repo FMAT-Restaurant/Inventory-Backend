@@ -26,6 +26,7 @@ describe('ItemService', () => {
   const mockExecFindOne = vi.fn();
   const mockExecFindByIdAndUpdate = vi.fn();
   const mockExecFindOneAndUpdate = vi.fn();
+  const mockExecExists = vi.fn();
   const mockSave = vi.fn();
 
   function MockModel(this: any, dto: any) {
@@ -40,6 +41,7 @@ describe('ItemService', () => {
   MockModel.findOneAndUpdate = vi
     .fn()
     .mockReturnValue({ exec: mockExecFindOneAndUpdate });
+  MockModel.exists = vi.fn().mockReturnValue({ exec: mockExecExists });
 
   const createDto = {
     sku: 'ING-0001',
@@ -329,6 +331,93 @@ describe('ItemService', () => {
       );
       mockExecFindByIdAndUpdate.mockResolvedValue(null);
       await expect(service.updateStockAndCost(VALID_ID, 10)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('reserveStock', () => {
+    it('reserva stock solo si hay disponibilidad y emite el cambio', async () => {
+      const updated = { _id: VALID_ID, totalStock: 10, reservedStock: 5 };
+      mockExecFindOneAndUpdate.mockResolvedValue(updated);
+
+      const result = await service.reserveStock(VALID_ID, 3);
+
+      expect(MockModel.findOneAndUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          _id: VALID_ID,
+          ...ACTIVE_FILTER,
+          $expr: expect.any(Object),
+        }),
+        { $inc: { reservedStock: 3 } },
+        { new: true },
+      );
+      expect(result).toEqual(updated);
+      expect(emittedEvents).toEqual([{ itemId: VALID_ID, action: 'updated' }]);
+    });
+
+    it('devuelve null sin emitir evento si no hay stock suficiente', async () => {
+      mockExecFindOneAndUpdate.mockResolvedValue(null);
+
+      await expect(service.reserveStock(VALID_ID, 20)).resolves.toBeNull();
+      expect(emittedEvents).toEqual([]);
+    });
+
+    it('rechaza cantidades inválidas y IDs inválidos', async () => {
+      await expect(service.reserveStock(VALID_ID, 0)).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.reserveStock('invalido', 1)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('adjustReservedStock', () => {
+    it('incrementa el stock reservado cuando el delta es positivo', async () => {
+      const updated = { _id: VALID_ID, reservedStock: 8 };
+      mockExecFindByIdAndUpdate.mockResolvedValue(updated);
+
+      const result = await service.adjustReservedStock(VALID_ID, 2);
+
+      expect(MockModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        VALID_ID,
+        { $inc: { reservedStock: 2 } },
+        { new: true },
+      );
+      expect(result).toEqual(updated);
+      expect(emittedEvents).toEqual([{ itemId: VALID_ID, action: 'updated' }]);
+    });
+
+    it('decrementa solo si hay stock reservado suficiente', async () => {
+      mockExecFindOneAndUpdate.mockResolvedValue({
+        _id: VALID_ID,
+        reservedStock: 4,
+      });
+
+      await service.adjustReservedStock(VALID_ID, -3);
+
+      expect(MockModel.findOneAndUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ _id: VALID_ID, $expr: expect.any(Object) }),
+        { $inc: { reservedStock: -3 } },
+        { new: true },
+      );
+    });
+
+    it('lanza ConflictException si no hay stock reservado suficiente', async () => {
+      mockExecFindOneAndUpdate.mockResolvedValue(null);
+      mockExecExists.mockResolvedValue({ _id: VALID_ID });
+
+      await expect(service.adjustReservedStock(VALID_ID, -3)).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    it('lanza NotFoundException si el item no existe', async () => {
+      mockExecFindOneAndUpdate.mockResolvedValue(null);
+      mockExecExists.mockResolvedValue(null);
+
+      await expect(service.adjustReservedStock(VALID_ID, -3)).rejects.toThrow(
         NotFoundException,
       );
     });

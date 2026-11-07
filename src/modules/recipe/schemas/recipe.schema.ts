@@ -21,6 +21,9 @@ export class Recipe extends Document {
 
   @Prop({ type: [RecipeItemSchema], required: true, default: [] })
   items: RecipeItem[];
+
+  @Prop({ type: Boolean, default: true })
+  lastKnownAvailability: boolean;
 }
 
 export const RecipeSchema = SchemaFactory.createForClass(Recipe);

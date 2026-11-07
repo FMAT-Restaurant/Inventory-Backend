@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import {
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
   OnModuleInit,
 } from '@nestjs/common';
@@ -11,14 +12,22 @@ import { Batch, BatchStatus } from './schemas/batch.schema.js';
 import { CreateBatchDto } from './dto/create-batch.dto.js';
 import { UpdateBatchDto } from './dto/update-batch.dto.js';
 import { ItemService } from '../item/item.service.js';
+import {
+  RecordStockMovementInput,
+  StockMovementService,
+} from '../stock-movement/stock-movement.service.js';
+import { StockMovementType } from '../stock-movement/schemas/stock-movement.schema.js';
 
 const DUPLICATE_KEY_ERROR_CODE = 11000;
 
 @Injectable()
 export class BatchService implements OnModuleInit {
+  private readonly logger = new Logger(BatchService.name);
+
   constructor(
     @InjectModel(Batch.name) private batchModel: Model<Batch>,
     private readonly itemService: ItemService,
+    private readonly stockMovementService: StockMovementService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -47,6 +56,15 @@ export class BatchService implements OnModuleInit {
 
     try {
       const saved = await newBatch.save();
+      if (Number(saved.quantity) > 0) {
+        await this.recordMovementSafely({
+          batchId: String(saved._id),
+          movementType: StockMovementType.IN,
+          quantity: Number(saved.quantity),
+          referenceId: createDto.supplierId ?? null,
+          reason: 'Alta de lote',
+        });
+      }
       await this.syncItemStockAndCost(createDto.itemId);
       return saved;
     } catch (error) {
@@ -145,18 +163,30 @@ export class BatchService implements OnModuleInit {
 
   async update(id: string, updateDto: UpdateBatchDto): Promise<Batch> {
     const currentBatch = await this.findOne(id);
+    const { reason, createdBy, ...batchChanges } = updateDto;
 
-    const nextQuantity = updateDto.quantity ?? currentBatch.quantity;
+    const nextQuantity = batchChanges.quantity ?? currentBatch.quantity;
     const nextExpirationDate =
-      updateDto.expirationDate ?? currentBatch.expirationDate;
+      batchChanges.expirationDate ?? currentBatch.expirationDate;
     const status = this.computeStatus(nextQuantity, nextExpirationDate);
 
     const updatedBatch = await this.batchModel
-      .findByIdAndUpdate(id, { ...updateDto, status }, { new: true })
+      .findByIdAndUpdate(id, { ...batchChanges, status }, { new: true })
       .exec();
 
     if (!updatedBatch) {
       throw new NotFoundException(`Lote con id '${id}' no encontrado`);
+    }
+
+    const quantityDelta = Number(nextQuantity) - Number(currentBatch.quantity);
+    if (quantityDelta !== 0) {
+      await this.recordMovementSafely({
+        batchId: id,
+        movementType: StockMovementType.ADJUSTMENT,
+        quantity: quantityDelta,
+        reason: reason ?? 'Ajuste manual de lote',
+        createdBy,
+      });
     }
 
     await this.syncItemStockAndCost(String(currentBatch.itemId));
@@ -166,13 +196,36 @@ export class BatchService implements OnModuleInit {
 
   async remove(id: string): Promise<void> {
     const currentBatch = await this.findOne(id);
+    const removedQuantity = Number(currentBatch.quantity);
 
     const result = await this.batchModel.deleteOne({ _id: id }).exec();
     if (result.deletedCount === 0) {
       throw new NotFoundException(`Lote con id '${id}' no encontrado`);
     }
 
+    if (removedQuantity > 0) {
+      await this.recordMovementSafely({
+        batchId: id,
+        movementType: StockMovementType.ADJUSTMENT,
+        quantity: -removedQuantity,
+        reason: 'Eliminación de lote',
+      });
+    }
+
     await this.syncItemStockAndCost(String(currentBatch.itemId));
+  }
+
+  private async recordMovementSafely(
+    input: RecordStockMovementInput,
+  ): Promise<void> {
+    try {
+      await this.stockMovementService.record(input);
+    } catch (error) {
+      this.logger.error(
+        `No se pudo registrar el movimiento de stock del lote '${input.batchId}'`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
   }
 
   private async syncItemStockAndCost(itemId: string): Promise<void> {
@@ -205,5 +258,55 @@ export class BatchService implements OnModuleInit {
       Math.round(totalStock * 1000) / 1000,
       averageCost,
     );
+  }
+
+  async consumeByFefo(
+    itemId: string,
+    quantityToConsume: number,
+    referenceId?: string,
+    reason = 'Consumo por orden servida',
+  ): Promise<void> {
+    if (!isValidObjectId(itemId) || !Number.isFinite(quantityToConsume) || quantityToConsume <= 0) {
+      return;
+    }
+
+    let remaining = Math.round(quantityToConsume * 1000) / 1000;
+    const batches = await this.batchModel
+      .find({ itemId })
+      .sort({ expirationDate: 1, _id: 1 })
+      .exec();
+
+    for (const batch of batches) {
+      if (remaining <= 0) {
+        break;
+      }
+      const status = this.computeStatus(batch.quantity, batch.expirationDate);
+      if (status === BatchStatus.EXPIRED) {
+        continue;
+      }
+      if ((status !== BatchStatus.ACTIVE && status !== BatchStatus.EXPIRES_TODAY) || batch.quantity <= 0) {
+        continue;
+      }
+
+      const take = Math.min(remaining, batch.quantity);
+      const newQuantity = Math.round((batch.quantity - take) * 1000) / 1000;
+      const newStatus = this.computeStatus(newQuantity, batch.expirationDate);
+
+      batch.quantity = newQuantity;
+      batch.status = newStatus;
+      await batch.save();
+
+      await this.recordMovementSafely({
+        batchId: String(batch._id),
+        movementType: StockMovementType.OUT,
+        quantity: take,
+        referenceId: referenceId ?? null,
+        reason,
+      });
+
+      remaining = Math.round((remaining - take) * 1000) / 1000;
+    }
+
+    await this.syncItemStockAndCost(itemId);
   }
 }
