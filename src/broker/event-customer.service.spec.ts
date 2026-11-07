@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as amqp from 'amqplib';
 import { EventConsumer } from './event-customer.service.js';
@@ -8,6 +8,7 @@ vi.mock('amqplib', () => ({ connect: vi.fn() }));
 
 describe('EventConsumer', () => {
   let consumer: EventConsumer;
+  const originalRabbitEnabled = process.env.RABBITMQ_ENABLED;
   const callbacks = new Map<string, (message: unknown) => void>();
   const channel = {
     assertExchange: vi.fn().mockResolvedValue(undefined),
@@ -44,6 +45,15 @@ describe('EventConsumer', () => {
       providers: [EventConsumer],
     }).compile();
     consumer = module.get<EventConsumer>(EventConsumer);
+  });
+
+  afterEach(() => {
+    if (originalRabbitEnabled === undefined) {
+      delete process.env.RABBITMQ_ENABLED;
+    } else {
+      process.env.RABBITMQ_ENABLED = originalRabbitEnabled;
+    }
+    vi.useRealTimers();
   });
 
   it('declara exchange, cola y binding antes de consumir un evento', async () => {
@@ -235,5 +245,124 @@ describe('EventConsumer', () => {
 
     expect(channel.close).toHaveBeenCalledOnce();
     expect(connection.close).toHaveBeenCalledOnce();
+  });
+
+  it('omite la conexión cuando RabbitMQ está deshabilitado', async () => {
+    process.env.RABBITMQ_ENABLED = 'false';
+
+    await consumer.onModuleInit();
+    await consumer.consumeSubscriptions(
+      new EventSubscriptions().on('menu.topic', 'menu.plate.created', vi.fn()),
+      'recipes',
+    );
+
+    expect(amqp.connect).not.toHaveBeenCalled();
+    expect(channel.consume).not.toHaveBeenCalled();
+    await consumer.onModuleDestroy();
+  });
+
+  it('reconecta automáticamente tras un fallo inicial', async () => {
+    vi.useFakeTimers();
+    vi.mocked(amqp.connect).mockRejectedValueOnce(new Error('broker caído'));
+
+    await consumer.onModuleInit();
+    expect(amqp.connect).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(amqp.connect).toHaveBeenCalledTimes(2);
+    expect(connection.createChannel).toHaveBeenCalled();
+
+    await consumer.onModuleDestroy();
+  });
+
+  it('reconecta cuando la conexión se cierra inesperadamente', async () => {
+    vi.useFakeTimers();
+    await consumer.onModuleInit();
+
+    const closeHandler = channel.on.mock.calls.find(
+      ([event]) => event === 'close',
+    )?.[1] as (() => void) | undefined;
+    expect(closeHandler).toBeTypeOf('function');
+
+    closeHandler?.();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(amqp.connect).toHaveBeenCalledTimes(2);
+    await consumer.onModuleDestroy();
+  });
+
+  it('registra la cola y reconecta si falla el binding', async () => {
+    vi.useFakeTimers();
+    await consumer.onModuleInit();
+    channel.bindQueue.mockRejectedValueOnce(new Error('binding falló'));
+
+    await expect(
+      consumer.consumeSubscriptions(
+        new EventSubscriptions().on(
+          'menu.topic',
+          'menu.plate.created',
+          vi.fn(),
+        ),
+        'recipes',
+      ),
+    ).resolves.toBeUndefined();
+
+    await consumer.onModuleDestroy();
+  });
+
+  it('lanza error al consumir sin canal disponible', async () => {
+    vi.useFakeTimers();
+    vi.mocked(amqp.connect).mockRejectedValueOnce(new Error('broker caído'));
+    await consumer.onModuleInit();
+
+    await expect(
+      consumer.consume('menu.topic', 'menu.plate.created', vi.fn()),
+    ).rejects.toThrow('no está inicializado');
+
+    await consumer.onModuleDestroy();
+  });
+
+  it('ignora mensajes sin contenido', async () => {
+    await consumer.onModuleInit();
+    await consumer.consumeSubscriptions(
+      new EventSubscriptions().on('menu.topic', 'menu.plate.created', vi.fn()),
+      'recipes',
+    );
+
+    const callback = callbacks.get('recipes');
+    callback?.(null);
+    callback?.({ fields: { routingKey: 'menu.plate.created' } });
+
+    expect(channel.ack).not.toHaveBeenCalled();
+  });
+
+  it('registra el error si no puede iniciar el consumo de la cola', async () => {
+    await consumer.onModuleInit();
+    channel.consume.mockRejectedValueOnce(new Error('consume falló'));
+    const logger = (
+      consumer as unknown as {
+        logger: { error: (...args: unknown[]) => void };
+      }
+    ).logger;
+    const errorSpy = vi.spyOn(logger, 'error');
+
+    await consumer.consumeSubscriptions(
+      new EventSubscriptions().on('menu.topic', 'menu.plate.created', vi.fn()),
+      'recipes',
+    );
+
+    await vi.waitFor(() => expect(errorSpy).toHaveBeenCalled());
+  });
+
+  it('cancela el reintento pendiente al detener el módulo', async () => {
+    vi.useFakeTimers();
+    vi.mocked(amqp.connect).mockRejectedValueOnce(new Error('broker caído'));
+    await consumer.onModuleInit();
+
+    await consumer.onModuleDestroy();
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(amqp.connect).toHaveBeenCalledTimes(1);
   });
 });

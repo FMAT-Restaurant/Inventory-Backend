@@ -48,7 +48,12 @@ describe('BatchService', () => {
     Object.assign(this, dto);
     this.save = () => mockSave(this);
   }
-  MockModel.find = vi.fn().mockReturnValue({ exec: mockExecFind });
+  const findChain = {
+    sort: vi.fn(),
+    exec: mockExecFind,
+  };
+  findChain.sort.mockReturnValue(findChain);
+  MockModel.find = vi.fn().mockReturnValue(findChain);
   MockModel.findById = vi.fn().mockReturnValue({ exec: mockExecFindById });
   MockModel.findByIdAndUpdate = vi
     .fn()
@@ -359,6 +364,182 @@ describe('BatchService', () => {
       );
 
       await expect(service.create(mockCreateDto)).resolves.toBeDefined();
+    });
+  });
+
+  describe('consumeByFefo', () => {
+    function batchDoc(overrides: Record<string, unknown> = {}) {
+      return {
+        _id: `batch-${Math.random().toString(16).slice(2)}`,
+        itemId: mockItemId,
+        quantity: 1,
+        cost: 10,
+        expirationDate: new Date('2099-01-01'),
+        status: BatchStatus.ACTIVE,
+        save: vi.fn().mockResolvedValue(undefined),
+        ...overrides,
+      };
+    }
+
+    it('ignora itemId o cantidades inválidas', async () => {
+      await service.consumeByFefo('invalido', 5);
+      await service.consumeByFefo(mockItemId, 0);
+      await service.consumeByFefo(mockItemId, Number.NaN);
+
+      expect(MockModel.find).not.toHaveBeenCalled();
+    });
+
+    it('consume desde los lotes más próximos a vencer y registra movimientos', async () => {
+      const expired = batchDoc({
+        _id: 'expired',
+        quantity: 5,
+        expirationDate: new Date('2020-01-01'),
+      });
+      const first = batchDoc({
+        _id: 'first',
+        quantity: 3,
+        cost: 10,
+        expirationDate: new Date('2099-01-01'),
+      });
+      const second = batchDoc({
+        _id: 'second',
+        quantity: 5,
+        cost: 20,
+        expirationDate: new Date('2099-02-01'),
+      });
+
+      mockExecFind
+        .mockResolvedValueOnce([expired, first, second])
+        .mockResolvedValueOnce([first, second]);
+
+      await service.consumeByFefo(mockItemId, 6, 'ORD-1');
+
+      expect(MockModel.find).toHaveBeenCalledWith({ itemId: mockItemId });
+      expect(findChain.sort).toHaveBeenCalledWith({
+        expirationDate: 1,
+        _id: 1,
+      });
+      expect(expired.save).not.toHaveBeenCalled();
+      expect(first.quantity).toBe(0);
+      expect(first.status).toBe(BatchStatus.DEPLETED);
+      expect(first.save).toHaveBeenCalledOnce();
+      expect(second.quantity).toBe(2);
+      expect(second.status).toBe(BatchStatus.ACTIVE);
+      expect(second.save).toHaveBeenCalledOnce();
+
+      expect(mockStockMovementService.record).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          batchId: 'first',
+          movementType: StockMovementType.OUT,
+          quantity: 3,
+          referenceId: 'ORD-1',
+          reason: 'Consumo por orden servida',
+        }),
+      );
+      expect(mockStockMovementService.record).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          batchId: 'second',
+          movementType: StockMovementType.OUT,
+          quantity: 3,
+          referenceId: 'ORD-1',
+        }),
+      );
+      expect(mockItemService.updateStockAndCost).toHaveBeenCalledWith(
+        mockItemId,
+        2,
+        20,
+      );
+    });
+
+    it('deja de consumir cuando cubre la cantidad solicitada', async () => {
+      const batch = batchDoc({ _id: 'only', quantity: 10 });
+      mockExecFind
+        .mockResolvedValueOnce([batch])
+        .mockResolvedValueOnce([batch]);
+
+      await service.consumeByFefo(mockItemId, 4, undefined, 'Merma');
+
+      expect(batch.quantity).toBe(6);
+      expect(batch.save).toHaveBeenCalledOnce();
+      expect(mockStockMovementService.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          quantity: 4,
+          referenceId: null,
+          reason: 'Merma',
+        }),
+      );
+    });
+
+    it('omite lotes expirados o agotados y sincroniza stock en cero', async () => {
+      const expired = batchDoc({
+        _id: 'expired',
+        quantity: 5,
+        expirationDate: new Date('2020-01-01'),
+      });
+      const depleted = batchDoc({ _id: 'depleted', quantity: 0 });
+      mockExecFind
+        .mockResolvedValueOnce([expired, depleted])
+        .mockResolvedValueOnce([]);
+
+      await service.consumeByFefo(mockItemId, 2);
+
+      expect(expired.save).not.toHaveBeenCalled();
+      expect(depleted.save).not.toHaveBeenCalled();
+      expect(mockStockMovementService.record).not.toHaveBeenCalled();
+      expect(mockItemService.updateStockAndCost).toHaveBeenCalledWith(
+        mockItemId,
+        0,
+        undefined,
+      );
+    });
+
+    it('tolera que falle el registro de un movimiento', async () => {
+      const batch = batchDoc({ _id: 'only', quantity: 5 });
+      mockExecFind
+        .mockResolvedValueOnce([batch])
+        .mockResolvedValueOnce([batch]);
+      mockStockMovementService.record.mockRejectedValueOnce(
+        new Error('auditoría caída'),
+      );
+
+      await expect(
+        service.consumeByFefo(mockItemId, 2),
+      ).resolves.toBeUndefined();
+
+      expect(batch.quantity).toBe(3);
+      expect(mockItemService.updateStockAndCost).toHaveBeenCalled();
+    });
+
+    it('no sincroniza si el itemId no es un ObjectId válido', async () => {
+      await (service as unknown as {
+        syncItemStockAndCost: (id: string) => Promise<void>;
+      }).syncItemStockAndCost('invalido');
+
+      expect(MockModel.find).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('onModuleInit', () => {
+    it('elimina el índice legado de batchNumber', async () => {
+      const dropIndex = vi.fn().mockResolvedValue(undefined);
+      (MockModel as unknown as { collection: unknown }).collection = {
+        dropIndex,
+      };
+
+      await service.onModuleInit();
+
+      expect(dropIndex).toHaveBeenCalledWith('batchNumber_1');
+    });
+
+    it('no falla si el índice legado no existe', async () => {
+      const dropIndex = vi.fn().mockRejectedValue(new Error('index not found'));
+      (MockModel as unknown as { collection: unknown }).collection = {
+        dropIndex,
+      };
+
+      await expect(service.onModuleInit()).resolves.toBeUndefined();
     });
   });
 });
