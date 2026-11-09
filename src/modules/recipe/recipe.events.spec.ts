@@ -137,4 +137,103 @@ describe('RecipeEvents', () => {
       }),
     ).resolves.toBeUndefined();
   });
+
+  it('menu.source.created indica que la receta se actualizó cuando ya existía', async () => {
+    registerOrUpdate.mockResolvedValueOnce({
+      recipe: { plateId: 'P-1' },
+      isNew: false,
+    });
+    const { subscriptions } = await subscribe();
+    await subscriptions.matching('menu.source.created')[0].handler({
+      sourceId: 'P-1',
+      name: 'Platillo',
+      items: [{ id: 'I-1', quantity: 1 }],
+    });
+    expect(registerOrUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('menu.source.updated crea la receta si no existía (isNew: true)', async () => {
+    registerOrUpdate.mockResolvedValueOnce({
+      recipe: { plateId: 'P-1' },
+      isNew: true,
+    });
+    const { subscriptions } = await subscribe();
+    await subscriptions.matching('menu.source.updated')[0].handler({
+      sourceId: 'P-1',
+      name: 'Platillo',
+      items: [{ id: 'I-1', quantity: 1 }],
+    });
+    expect(registerOrUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('menu.source.updated maneja el fallo al guardar sin propagarlo', async () => {
+    registerOrUpdate.mockRejectedValueOnce(new Error('Item inexistente'));
+    const { subscriptions } = await subscribe();
+    await expect(
+      subscriptions.matching('menu.source.updated')[0].handler({
+        sourceId: 'P-1',
+        name: 'Platillo',
+        items: [{ id: 'I-1', quantity: 1 }],
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('menu.source.updated maneja errores que no son instancia de Error', async () => {
+    registerOrUpdate.mockRejectedValueOnce('fallo como texto');
+    const { subscriptions } = await subscribe();
+    await expect(
+      subscriptions.matching('menu.source.updated')[0].handler({
+        sourceId: 'P-1',
+        name: 'Platillo',
+        items: [{ id: 'I-1', quantity: 1 }],
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it.each([
+    [null],
+    [undefined],
+    ['texto plano'],
+    [{ name: 'Platillo', items: [{ id: 'I-1', quantity: 1 }] }],
+    [{ sourceId: 'P-1', name: 'Platillo', items: [{ quantity: 1 }] }],
+    [{ sourceId: 'P-1', name: 'Platillo', items: [{ id: 'I-1' }] }],
+    [
+      {
+        sourceId: 'P-1',
+        name: 'Platillo',
+        items: [{ id: 'I-1', quantity: 0 }],
+      },
+    ],
+  ])('menu.source.updated rechaza el payload inválido: %j', async (payload) => {
+    const { subscriptions } = await subscribe();
+    await expect(
+      subscriptions.matching('menu.source.updated')[0].handler(payload),
+    ).resolves.toBeUndefined();
+    expect(registerOrUpdate).not.toHaveBeenCalled();
+  });
+
+  it('menu.source.deleted maneja errores inesperados sin propagarlos', async () => {
+    remove.mockRejectedValueOnce(new Error('Mongo caído'));
+    const { subscriptions } = await subscribe();
+    await expect(
+      subscriptions
+        .matching('menu.source.deleted')[0]
+        .handler({ sourceId: 'P-1' }),
+    ).resolves.toBeUndefined();
+    expect(remove).toHaveBeenCalledWith('P-1');
+  });
+
+  it('menu.source.updated actualiza una receta existente (isNew: false)', async () => {
+    registerOrUpdate.mockResolvedValueOnce({
+      recipe: { plateId: 'P-1' },
+      isNew: false,
+    });
+    const { subscriptions } = await subscribe();
+    await subscriptions.matching('menu.source.updated')[0].handler({
+      sourceId: 'P-1',
+      name: 'Platillo',
+      items: [{ id: 'I-1', quantity: 1 }],
+    });
+    expect(registerOrUpdate).toHaveBeenCalledTimes(1);
+  });
 });
