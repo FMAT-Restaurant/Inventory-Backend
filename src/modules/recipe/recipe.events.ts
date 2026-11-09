@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
 import { EventConsumer } from '../../broker/event-customer.service.js';
 import { EventSubscriptions } from '../../broker/event-subscriptions.js';
 import {
@@ -26,10 +31,10 @@ export class RecipeEvents implements OnModuleInit {
         this.handlePlateCreated(payload),
       )
       .on(MENU_EXCHANGE, MenuRoutingKeys.PlateUpdated, (payload) =>
-        this.logEvent(MenuRoutingKeys.PlateUpdated, payload),
+        this.handlePlateUpdated(payload),
       )
       .on(MENU_EXCHANGE, MenuRoutingKeys.PlateDeleted, (payload) =>
-        this.logEvent(MenuRoutingKeys.PlateDeleted, payload),
+        this.handlePlateDeleted(payload),
       );
 
     try {
@@ -74,11 +79,93 @@ export class RecipeEvents implements OnModuleInit {
     }
   }
 
+  // Al editarse un platillo, sincronizamos su receta (upsert idempotente)
+  private async handlePlateUpdated(payload: PlateEvent): Promise<void> {
+    this.logger.log(
+      `📨 [Menu] '${MenuRoutingKeys.PlateUpdated}' recibido: ${JSON.stringify(payload)}`,
+    );
+
+    const reasons = this.describeInvalidPayload(payload);
+    const dto = reasons.length === 0 ? this.toCreateRecipeDto(payload) : null;
+
+    if (!dto) {
+      this.logger.warn(
+        `⚠️ '${MenuRoutingKeys.PlateUpdated}' RECHAZADO, se ignora. Motivo(s): ${reasons.join('; ')}`,
+      );
+      return;
+    }
+
+    try {
+      const { isNew } = await this.recipeService.registerOrUpdate(dto);
+      this.logger.log(
+        `✏️ Receta '${dto.plateId}' ${isNew ? 'no existía y se creó' : 'actualizada'} desde '${MenuRoutingKeys.PlateUpdated}'`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `❌ Error al procesar '${MenuRoutingKeys.PlateUpdated}' de la receta '${dto.plateId}': ${message}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
+  }
+
+  // Lista los motivos por los que un payload de menú no es válido
+  private describeInvalidPayload(payload: PlateEvent): string[] {
+    const reasons: string[] = [];
+
+    if (!payload || typeof payload !== 'object') {
+      return ['el payload no es un objeto JSON'];
+    }
+    if (!payload.sourceId) reasons.push("falta 'sourceId'");
+    if (!payload.name) reasons.push("falta 'name'");
+
+    const items = payload.items;
+    if (!Array.isArray(items) || items.length === 0) {
+      reasons.push("'items' debe ser un arreglo con al menos 1 elemento");
+    } else {
+      items.forEach((item, index) => {
+        if (!item?.id) reasons.push(`items[${index}] sin 'id'`);
+        if (!(Number(item?.quantity) > 0)) {
+          reasons.push(`items[${index}] con 'quantity' inválida`);
+        }
+      });
+    }
+
+    return reasons;
+  }
+
+  // Al eliminarse un platillo, eliminamos su receta (idempotente)
+  private async handlePlateDeleted(payload: {
+    sourceId?: string;
+  }): Promise<void> {
+    const sourceId = payload?.sourceId;
+
+    if (!sourceId) {
+      this.logger.warn(
+        `⚠️ Evento '${MenuRoutingKeys.PlateDeleted}' con payload inválido. Se ignora: ${JSON.stringify(payload)}`,
+      );
+      return;
+    }
+
+    try {
+      await this.recipeService.remove(sourceId);
+      this.logger.log(
+        `🗑️ Receta eliminada para '${sourceId}' desde '${MenuRoutingKeys.PlateDeleted}'`,
+      );
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        this.logger.warn(`⚠️ La receta '${sourceId}' no existe. Se ignora`);
+        return;
+      }
+      this.logger.error(`❌ Error al eliminar la receta '${sourceId}':`, error);
+    }
+  }
+
   // Construye el CreateRecipeDto a partir del payload del evento del menú
   private toCreateRecipeDto(payload: PlateEvent): CreateRecipeDto | null {
     const items = payload?.items;
     if (
-      !payload?.plateId ||
+      !payload?.sourceId ||
       !payload?.name ||
       !Array.isArray(items) ||
       items.length === 0
@@ -87,19 +174,13 @@ export class RecipeEvents implements OnModuleInit {
     }
 
     const dto = new CreateRecipeDto();
-    dto.plateId = payload.plateId;
+    dto.plateId = payload.sourceId;
     dto.name = payload.name;
     dto.items = items.map((item) => ({
-      itemId: item.itemId,
-      requiredQuantity: item.requiredQuantity,
+      itemId: item.id,
+      requiredQuantity: item.quantity,
     }));
 
     return dto;
-  }
-
-  private logEvent(routingKey: string, payload: unknown): void {
-    this.logger.log(
-      `📨 [Menu] Evento '${routingKey}' recibido: ${JSON.stringify(payload)}`,
-    );
   }
 }

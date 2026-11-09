@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { EventConsumer } from '../../broker/event-customer.service.js';
 import { EventSubscriptions } from '../../broker/event-subscriptions.js';
@@ -9,6 +10,7 @@ describe('RecipeEvents', () => {
   let events: RecipeEvents;
   const consumeSubscriptions = vi.fn();
   const registerOrUpdate = vi.fn();
+  const remove = vi.fn();
 
   async function subscribe() {
     await events.onModuleInit();
@@ -22,6 +24,7 @@ describe('RecipeEvents', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     consumeSubscriptions.mockResolvedValue(undefined);
+    remove.mockResolvedValue(undefined);
     registerOrUpdate.mockResolvedValue({
       recipe: { plateId: 'P-1' },
       isNew: true,
@@ -36,7 +39,7 @@ describe('RecipeEvents', () => {
         },
         {
           provide: RecipeService,
-          useValue: { registerOrUpdate },
+          useValue: { registerOrUpdate, remove },
         },
       ],
     }).compile();
@@ -47,17 +50,17 @@ describe('RecipeEvents', () => {
     const { subscriptions, queue } = await subscribe();
     expect(queue).toBe('cola_recipe_events');
     expect(subscriptions.all.map(({ routingKey }) => routingKey)).toEqual([
-      'menu.plate.created',
-      'menu.plate.updated',
-      'menu.plate.deleted',
+      'menu.source.created',
+      'menu.source.updated',
+      'menu.source.deleted',
     ]);
 
-    const created = subscriptions.matching('menu.plate.created')[0].handler;
+    const created = subscriptions.matching('menu.source.created')[0].handler;
     await created({
-      plateId: 'P-1',
+      sourceId: 'P-1',
       name: 'Hamburguesa',
-      items: [{ itemId: 'I-1', requiredQuantity: 2 }],
-      timestamp: '2026-10-22T00:00:00Z',
+      sourceType: 'RECIPE',
+      items: [{ id: 'I-1', quantity: 2 }],
     });
 
     expect(registerOrUpdate).toHaveBeenCalledWith({
@@ -69,13 +72,13 @@ describe('RecipeEvents', () => {
 
   it.each([
     {},
-    { name: 'Platillo', items: [{ itemId: 'I-1' }] },
-    { plateId: 'P-1', items: [{ itemId: 'I-1' }] },
-    { plateId: 'P-1', name: 'Platillo', items: [] },
-    { plateId: 'P-1', name: 'Platillo', items: 'no es arreglo' },
+    { name: 'Platillo', items: [{ id: 'I-1', quantity: 1 }] },
+    { sourceId: 'P-1', items: [{ id: 'I-1', quantity: 1 }] },
+    { sourceId: 'P-1', name: 'Platillo', items: [] },
+    { sourceId: 'P-1', name: 'Platillo', items: 'no es arreglo' },
   ])('ignora un evento de creación incompleto: %j', async (payload) => {
     const { subscriptions } = await subscribe();
-    await subscriptions.matching('menu.plate.created')[0].handler(payload);
+    await subscriptions.matching('menu.source.created')[0].handler(payload);
     expect(registerOrUpdate).not.toHaveBeenCalled();
   });
 
@@ -84,25 +87,53 @@ describe('RecipeEvents', () => {
     await expect(events.onModuleInit()).resolves.toBeUndefined();
   });
 
-  it('los eventos de actualización y eliminación aún no modifican recetas', async () => {
+  it('menu.source.updated sincroniza la receta', async () => {
+    const { subscriptions } = await subscribe();
+    await subscriptions.matching('menu.source.updated')[0].handler({
+      sourceId: 'P-1',
+      name: 'Hamburguesa doble',
+      items: [{ id: 'I-1', quantity: 3 }],
+    });
+    expect(registerOrUpdate).toHaveBeenCalledWith({
+      plateId: 'P-1',
+      name: 'Hamburguesa doble',
+      items: [{ itemId: 'I-1', requiredQuantity: 3 }],
+    });
+  });
+
+  it('menu.source.updated ignora payloads incompletos', async () => {
     const { subscriptions } = await subscribe();
     await subscriptions
-      .matching('menu.plate.updated')[0]
-      .handler({ plateId: 'P-1' });
-    await subscriptions
-      .matching('menu.plate.deleted')[0]
-      .handler({ plateId: 'P-1' });
+      .matching('menu.source.updated')[0]
+      .handler({ sourceId: 'P-1' });
     expect(registerOrUpdate).not.toHaveBeenCalled();
+  });
+
+  it('menu.source.deleted elimina la receta', async () => {
+    const { subscriptions } = await subscribe();
+    await subscriptions
+      .matching('menu.source.deleted')[0]
+      .handler({ sourceId: 'P-1' });
+    expect(remove).toHaveBeenCalledWith('P-1');
+  });
+
+  it('menu.source.deleted ignora recetas inexistentes y payloads vacíos', async () => {
+    remove.mockRejectedValueOnce(new NotFoundException());
+    const { subscriptions } = await subscribe();
+    const deleted = subscriptions.matching('menu.source.deleted')[0].handler;
+    await expect(deleted({ sourceId: 'X' })).resolves.toBeUndefined();
+    await expect(deleted({})).resolves.toBeUndefined();
+    expect(remove).toHaveBeenCalledTimes(1);
   });
 
   it('maneja el fallo al registrar una receta sin propagarlo', async () => {
     registerOrUpdate.mockRejectedValueOnce(new Error('Item inexistente'));
     const { subscriptions } = await subscribe();
     await expect(
-      subscriptions.matching('menu.plate.created')[0].handler({
-        plateId: 'P-1',
+      subscriptions.matching('menu.source.created')[0].handler({
+        sourceId: 'P-1',
         name: 'Platillo',
-        items: [{ itemId: 'I-1', requiredQuantity: 1 }],
+        items: [{ id: 'I-1', quantity: 1 }],
       }),
     ).resolves.toBeUndefined();
   });
