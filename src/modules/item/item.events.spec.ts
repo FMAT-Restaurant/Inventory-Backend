@@ -38,8 +38,8 @@ describe('ItemEvents', () => {
         routingKey,
       ]),
     ).toEqual([
-      ['menu.topic', 'menu.plate.created'],
-      ['menu.topic', 'menu.plate.updated'],
+      ['menu.topic', 'menu.source.created'],
+      ['menu.topic', 'menu.source.updated'],
     ]);
     for (const { handler } of subscriptions.all) {
       expect(handler({ plateId: 'P-1' })).toBeUndefined();

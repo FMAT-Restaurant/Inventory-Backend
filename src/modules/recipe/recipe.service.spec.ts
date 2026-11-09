@@ -86,6 +86,13 @@ describe('RecipeService', () => {
     );
   }
 
+  function getAvailabilityCalls() {
+    return mockPublisher.publish.mock.calls.filter(
+      ([, routingKey]) =>
+        routingKey === 'inventory.recipe.availability-changed',
+    );
+  }
+
   async function flushAsync(): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
@@ -341,8 +348,6 @@ describe('RecipeService', () => {
         expect.objectContaining({
           plateId: 'PLATE-001',
           isAvailable: false,
-          maxPreparablePortions: 0,
-          productionCost: 0,
         }),
       );
     });
@@ -359,7 +364,7 @@ describe('RecipeService', () => {
   });
 
   describe('notificación de receta no disponible', () => {
-    it('publica el evento cuando la receta deja de ser preparable (AC-01)', async () => {
+    it('publica la disponibilidad en false cuando la receta deja de ser preparable (AC-01)', async () => {
       const recipe = buildRecipe();
       mockExecFind.mockResolvedValue([recipe]);
       mockItemService.findOne.mockResolvedValue({
@@ -377,23 +382,16 @@ describe('RecipeService', () => {
       await vi.waitFor(() => {
         expect(mockPublisher.publish).toHaveBeenCalledWith(
           'inventory.topic',
-          'inventory.recipe.not-available',
+          'inventory.recipe.availability-changed',
           expect.objectContaining({
             plateId: 'PLATE-001',
-            name: 'Hamburguesa',
-            limitingIngredients: [
-              expect.objectContaining({
-                itemId: mockItemId1,
-                itemName: 'Carne',
-                requiredQuantity: 1,
-                availableStock: 0,
-              }),
-            ],
+            isAvailable: false,
           }),
         );
       });
 
-      expect(recipe.lastKnownAvailability).toBe(false);
+      // El evento 'inventory.recipe.not-available' está desactivado
+      expect(getNotAvailableCalls()).toHaveLength(0);
     });
 
     it('no publica si el item no pertenece a ninguna receta (AC-02)', async () => {
@@ -409,7 +407,7 @@ describe('RecipeService', () => {
       expect(mockPublisher.publish).not.toHaveBeenCalled();
     });
 
-    it('publica un evento por cada receta afectada (AC-03)', async () => {
+    it('publica la disponibilidad de cada receta afectada (AC-03)', async () => {
       const recipeA = buildRecipe({
         _id: new Types.ObjectId(),
         plateId: 'PLATE-A',
@@ -432,7 +430,7 @@ describe('RecipeService', () => {
       });
 
       await vi.waitFor(() => {
-        const calls = getNotAvailableCalls();
+        const calls = getAvailabilityCalls();
         expect(calls).toHaveLength(2);
         expect(calls.map(([, , payload]) => payload.plateId)).toEqual(
           expect.arrayContaining(['PLATE-A', 'PLATE-B']),
@@ -461,7 +459,7 @@ describe('RecipeService', () => {
       expect(recipe.lastKnownAvailability).toBe(true);
     });
 
-    it('no publica duplicados mientras la receta sigue no disponible (AC-05)', async () => {
+    it('no publica not-available aunque la receta siga sin stock (AC-05)', async () => {
       const recipe = buildRecipe();
       mockExecFind.mockResolvedValue([recipe]);
       mockItemService.findOne.mockResolvedValue({
@@ -475,20 +473,19 @@ describe('RecipeService', () => {
         itemId: mockItemId1,
         action: 'updated',
       });
-
       await vi.waitFor(() => {
-        expect(getNotAvailableCalls()).toHaveLength(1);
+        expect(getAvailabilityCalls()).toHaveLength(1);
       });
 
       emitter.emit(ITEM_CHANGED_EVENT, {
         itemId: mockItemId1,
         action: 'updated',
       });
+      await vi.waitFor(() => {
+        expect(getAvailabilityCalls()).toHaveLength(2);
+      });
 
-      await flushAsync();
-
-      expect(getNotAvailableCalls()).toHaveLength(1);
-      expect(recipe.lastKnownAvailability).toBe(false);
+      expect(getNotAvailableCalls()).toHaveLength(0);
     });
 
     it('registra el fallo de publicación sin fallar la operación (AC-06)', async () => {
@@ -515,7 +512,7 @@ describe('RecipeService', () => {
       await flushAsync();
 
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('inventory.recipe.not-available'),
+        expect.stringContaining('inventory.recipe.availability-changed'),
       );
       expect(recipe.lastKnownAvailability).toBe(true);
       warnSpy.mockRestore();
