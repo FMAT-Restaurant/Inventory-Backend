@@ -8,7 +8,7 @@
 services:
   app:
     environment:
-      # Las pruebas de carga son de desarrollo/qa: habilitan /apo/test/reset.
+      # Las pruebas de carga se ejecutan en desarrollo/qa.
       NODE_ENV: development
       RABBITMQ_URL: "amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASSWORD:-supersecurepassword}@rabbitmq:5672"
     depends_on:
@@ -42,7 +42,6 @@ services:
     environment:
       K6_BASE_URL: http://app:8083
       K6_RABBITMQ_URL: "amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASSWORD:-supersecurepassword}@rabbitmq:5672"
-      K6_RESET_DB: ${K6_RESET_DB:-false}
       K6_AUTH_TOKEN: ${K6_AUTH_TOKEN:-}
       K6_POLL_TIMEOUT_MS: ${K6_POLL_TIMEOUT_MS:-10000}
       K6_POLL_INTERVAL_MS: ${K6_POLL_INTERVAL_MS:-250}

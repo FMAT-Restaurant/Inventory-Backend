@@ -11,11 +11,10 @@ Inventory Backend is a NestJS microservice for restaurant inventory. It persists
 | App | `src/app.*`, `src/main.ts` | Bootstrap and composition | Modules, database, common NestJS |
 | Database | `src/database/` | MongoDB connection lifecycle | Mongoose, config |
 | Broker | `src/broker/` | Messaging infrastructure | `amqplib`, NestJS common |
-| Item | `src/modules/item/` | Catalog and stock/cost updates | Mongoose, broker (for events), NestJS common |
-| Batch | `src/modules/batch/` | Batches and synchronization | Item service, Mongoose |
+| Item | `src/modules/item/` | Catalog and stock/cost updates | Supplier service, Mongoose, broker (for events), NestJS common |
+| Batch | `src/modules/batch/` | Batches and synchronization | Item service, Supplier service, Mongoose |
 | Recipe | `src/modules/recipe/` | Recipes and availability | Item service, ItemChangeEmitter, broker publisher, Mongoose |
 | Supplier | `src/modules/suppliers/` | Suppliers | Mongoose |
-| Test | `src/modules/test/` | Test helpers | Environment-gated |
 
 ## Dependency Rules
 

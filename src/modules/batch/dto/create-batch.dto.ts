@@ -6,9 +6,18 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
+import {
+  AMOUNT_DECIMALS,
+  MAX_AMOUNT,
+  MAX_QUANTITY,
+  MaxDecimals,
+  QUANTITY_DECIMALS,
+  Trim,
+} from '../../../common/validation.js';
 
 export class CreateBatchDto {
   @ApiPropertyOptional({
@@ -16,6 +25,7 @@ export class CreateBatchDto {
       'Número de lote (se combina con el SKU del item; si se omite, se genera automáticamente)',
     example: 'LOTE-2026-001',
   })
+  @Trim()
   @IsString()
   @MaxLength(60)
   @IsOptional()
@@ -28,7 +38,9 @@ export class CreateBatchDto {
 
   @ApiProperty({ description: 'Cantidad del lote', example: 100 })
   @IsNumber()
+  @MaxDecimals(QUANTITY_DECIMALS)
   @Min(0)
+  @Max(MAX_QUANTITY)
   quantity: number;
 
   @ApiProperty({
@@ -49,6 +61,8 @@ export class CreateBatchDto {
 
   @ApiProperty({ description: 'Costo unitario del lote', example: 150.5 })
   @IsNumber()
+  @MaxDecimals(AMOUNT_DECIMALS)
   @Min(0)
+  @Max(MAX_AMOUNT)
   cost: number;
 }

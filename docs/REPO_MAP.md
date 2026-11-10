@@ -17,7 +17,6 @@
 | Reservations | `src/modules/reservation/` | Reservation lifecycle, pending cache, Orders event consumer |
 | Processed events | `src/modules/processed-event/` | Persistent event idempotency (consumer + eventId) |
 | Suppliers | `src/modules/suppliers/` | Supplier catalog |
-| Test | `src/modules/test/` | Test utilities (restricted by environment) |
 | Database | `src/database/` | MongoDB connection |
 | Broker | `src/broker/` | RabbitMQ publisher/consumer and event conventions |
 

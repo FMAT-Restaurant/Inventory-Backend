@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { ItemService } from './item.service.js';
 import { Item } from './schemas/item.schema.js';
+import { SupplierService } from '../suppliers/supplier.service.js';
 import {
   ITEM_CHANGED_EVENT,
   ItemChangeEmitter,
@@ -28,6 +29,7 @@ describe('ItemService', () => {
   const mockExecFindOneAndUpdate = vi.fn();
   const mockExecExists = vi.fn();
   const mockSave = vi.fn();
+  const mockSupplierService = { assertAssignable: vi.fn() };
 
   function MockModel(this: any, dto: any) {
     Object.assign(this, dto);
@@ -55,6 +57,7 @@ describe('ItemService', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mockSave.mockResolvedValue({ _id: VALID_ID, ...createDto });
+    mockSupplierService.assertAssignable.mockResolvedValue(undefined);
     emittedEvents = [];
 
     emitter = new ItemChangeEmitter();
@@ -72,6 +75,10 @@ describe('ItemService', () => {
         {
           provide: ItemChangeEmitter,
           useValue: emitter,
+        },
+        {
+          provide: SupplierService,
+          useValue: mockSupplierService,
         },
       ],
     }).compile();
@@ -505,6 +512,168 @@ describe('ItemService', () => {
       mockSave.mockRejectedValue(otherError);
 
       await expect(service.create(createDto)).rejects.toThrow('write concern');
+    });
+  });
+
+  describe('unicidad de SKU y nombre', () => {
+    it('rechaza un SKU repetido indicando el campo correcto', async () => {
+      mockExecFindOne.mockResolvedValueOnce({ _id: 'otro', sku: 'ing-0001' });
+
+      await expect(service.create(createDto)).rejects.toThrow(
+        "Ya existe un item con el SKU 'ING-0001'",
+      );
+      expect(MockModel.findOne).toHaveBeenCalledWith({
+        ...ACTIVE_FILTER,
+        sku: { $regex: '^ING-0001$', $options: 'i' },
+      });
+      expect(mockSave).not.toHaveBeenCalled();
+    });
+
+    it('rechaza un nombre que solo difiere en mayúsculas', async () => {
+      mockExecFindOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ _id: 'otro', name: 'tomate' });
+
+      await expect(service.create(createDto)).rejects.toThrow(
+        "Ya existe un item con el nombre 'Tomate'",
+      );
+    });
+
+    it('solo compara contra items activos, así un item dado de baja libera su SKU', async () => {
+      mockExecFindOne.mockResolvedValue(null);
+
+      await service.create(createDto);
+
+      for (const [filter] of MockModel.findOne.mock.calls) {
+        expect(filter).toMatchObject(ACTIVE_FILTER);
+      }
+    });
+
+    it('al actualizar excluye al propio item de la comparación', async () => {
+      mockExecFindOne.mockResolvedValue(null);
+      mockExecFindOneAndUpdate.mockResolvedValue({ _id: VALID_ID });
+
+      await service.update(VALID_ID, { sku: 'ING-0002' });
+
+      expect(MockModel.findOne).toHaveBeenCalledWith({
+        ...ACTIVE_FILTER,
+        sku: { $regex: '^ING-0002$', $options: 'i' },
+        _id: { $ne: VALID_ID },
+      });
+    });
+
+    it('usa el índice violado para nombrar el campo si la base rechaza el duplicado', async () => {
+      mockExecFindOne.mockResolvedValue(null);
+      mockSave.mockRejectedValue(
+        Object.assign(new Error('E11000 duplicate key'), {
+          code: 11000,
+          keyPattern: { sku: 1 },
+        }),
+      );
+
+      await expect(service.create(createDto)).rejects.toThrow(
+        "Ya existe un item con el SKU 'ING-0001'",
+      );
+    });
+  });
+
+  describe('reglas de baja', () => {
+    it('impide dar de baja un item en uso', async () => {
+      service.registerRemovalGuard(async () => null);
+      service.registerRemovalGuard(async () => 'Lo usan 2 receta(s)');
+
+      await expect(service.remove(VALID_ID)).rejects.toThrow(
+        new ConflictException('Lo usan 2 receta(s)'),
+      );
+      expect(MockModel.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(emittedEvents).toEqual([]);
+    });
+
+    it('permite la baja cuando nada usa el item', async () => {
+      const guard = vi.fn().mockResolvedValue(null);
+      service.registerRemovalGuard(guard);
+      mockExecFindOneAndUpdate.mockResolvedValue({ _id: VALID_ID });
+
+      await expect(service.remove(VALID_ID)).resolves.toBeUndefined();
+      expect(guard).toHaveBeenCalledWith(VALID_ID);
+    });
+  });
+
+  describe('onModuleInit', () => {
+    it('elimina los índices únicos legados y normaliza isActive', async () => {
+      const dropIndex = vi.fn().mockResolvedValue(undefined);
+      const updateManyExec = vi.fn().mockResolvedValue({});
+      const model = MockModel as unknown as Record<string, unknown>;
+      model.collection = { dropIndex };
+      model.updateMany = vi.fn().mockReturnValue({ exec: updateManyExec });
+
+      await service.onModuleInit();
+
+      expect(dropIndex).toHaveBeenCalledWith('sku_1');
+      expect(dropIndex).toHaveBeenCalledWith('name_1');
+      expect(model.updateMany).toHaveBeenCalledWith(
+        { isActive: { $exists: false } },
+        { $set: { isActive: true } },
+      );
+    });
+
+    it('no falla si los índices no existen ni si la normalización falla', async () => {
+      const model = MockModel as unknown as Record<string, unknown>;
+      model.collection = {
+        dropIndex: vi.fn().mockRejectedValue(new Error('index not found')),
+      };
+      model.updateMany = vi.fn().mockReturnValue({
+        exec: vi.fn().mockRejectedValue(new Error('mongo caído')),
+      });
+
+      await expect(service.onModuleInit()).resolves.toBeUndefined();
+    });
+  });
+
+  describe('proveedor sugerido', () => {
+    const SUPPLIER_ID = '60d5ec9af682fbd39a1b865b';
+    const OTHER_SUPPLIER_ID = '60d5ec9af682fbd39a1b865c';
+
+    it('al crear exige que el proveedor exista y esté activo', async () => {
+      mockExecFindOne.mockResolvedValue(null);
+      mockSupplierService.assertAssignable.mockRejectedValue(
+        new NotFoundException(),
+      );
+
+      await expect(
+        service.create({ ...createDto, supplierIdSugested: SUPPLIER_ID }),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockSave).not.toHaveBeenCalled();
+    });
+
+    it('al actualizar conserva el proveedor actual aunque esté dado de baja', async () => {
+      mockExecFindOne.mockResolvedValue({
+        _id: VALID_ID,
+        supplierIdSugested: SUPPLIER_ID,
+      });
+      mockExecFindOneAndUpdate.mockResolvedValue({ _id: VALID_ID });
+
+      await service.update(VALID_ID, { supplierIdSugested: SUPPLIER_ID });
+
+      expect(mockSupplierService.assertAssignable).not.toHaveBeenCalled();
+    });
+
+    it('al actualizar valida el proveedor cuando se cambia por otro', async () => {
+      mockExecFindOne.mockResolvedValue({
+        _id: VALID_ID,
+        supplierIdSugested: SUPPLIER_ID,
+      });
+      mockSupplierService.assertAssignable.mockRejectedValue(
+        new NotFoundException(),
+      );
+
+      await expect(
+        service.update(VALID_ID, { supplierIdSugested: OTHER_SUPPLIER_ID }),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockSupplierService.assertAssignable).toHaveBeenCalledWith(
+        OTHER_SUPPLIER_ID,
+      );
+      expect(MockModel.findOneAndUpdate).not.toHaveBeenCalled();
     });
   });
 });

@@ -65,7 +65,6 @@ MongoDB
 | `RecipeModule`    | Recetas, disponibilidad, porciones, costo y publicación de eventos. |
 | `ReservationModule` | Reservas de stock, caché de consultas, expiración y eventos de Órdenes. |
 | `ProcessedEventModule` | Idempotencia persistente de eventos consumidos.                 |
-| `TestModule`      | Reset de base de datos restringido a dev/QA.                        |
 
 ### 4.2 Dominios considerados
 
@@ -130,7 +129,6 @@ MongoDB
 | `/reservations`   | Listar reservas por estado, orden o item.                                   |
 | `/reservations/:orderId` | Consultar la reserva de una orden.                                   |
 | `/reservations/pending/summary` | Resumir cantidades pendientes por item.                          |
-| `/apo/test/reset` | Reset de base de datos en dev/QA.                                           |
 
 El contrato detallado de cada endpoint se mantiene en `openapi.yml` y en los DTOs de cada módulo.
 
@@ -169,7 +167,6 @@ El contrato detallado de cada endpoint se mantiene en `openapi.yml` y en los DTO
 - Los permisos deben cubrir lectura y escritura por dominio.
 - Las operaciones sensibles deben registrar al actor responsable.
 - Los eventos internos deben validar origen o confianza según el contrato.
-- El endpoint de reset permanece bloqueado fuera de dev/QA.
 
 ### 7.3 Decisiones pendientes
 
@@ -307,6 +304,7 @@ La evaluación debe limitarse a las recetas que usan el item afectado, no debe e
 | `FRONTEND_URL`                 | Orígenes permitidos por CORS, separados por comas. |
 | `RABBITMQ_URL`                 | Conexión a RabbitMQ.                               |
 | `RABBITMQ_ENABLED`             | Permite deshabilitar el broker explícitamente.     |
+| `BATCH_EXPIRY_SWEEP_INTERVAL_MS` | Intervalo del barrido de lotes vencidos; `0` lo desactiva. |
 | `RESERVATION_TTL_MINUTES`      | Vigencia de reservas pendientes; `0` desactiva la expiración. |
 | `RESERVATION_SWEEP_INTERVAL_MS` | Intervalo del barrido de expiración; `0` lo desactiva. |
 | `RESERVATION_CACHE_TTL_MS`     | TTL de la caché de reservas en memoria.            |
@@ -370,7 +368,6 @@ npm run openapi:generate
 - Idempotencia persistente de eventos y caché de reservas.
 - Broker opcional y reconexión con backoff.
 - API documentada, validación global y CORS.
-- Reset restringido por ambiente.
 - Pruebas, lint y CI.
 
 ### Considerado, no implementado

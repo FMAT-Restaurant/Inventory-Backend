@@ -8,9 +8,6 @@ export const RABBITMQ_URL =
   __ENV.RABBITMQ_URL ||
   'amqp://admin:supersecurepassword@localhost:5672';
 
-export const RESET_DB =
-  String(__ENV.K6_RESET_DB || 'false').toLowerCase() === 'true';
-
 export const AUTH_TOKEN = __ENV.K6_AUTH_TOKEN || '';
 
 export const POLL_TIMEOUT_MS = Number(__ENV.K6_POLL_TIMEOUT_MS || 10000);

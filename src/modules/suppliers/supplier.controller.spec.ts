@@ -47,8 +47,8 @@ describe('SuppliersController', () => {
 
   describe('findAll', () => {
     it('debería retornar un array de proveedores', async () => {
-      const result = await controller.findAll();
-      expect(service.findAll).toHaveBeenCalled();
+      const result = await controller.findAll({});
+      expect(service.findAll).toHaveBeenCalledWith({});
       expect(result).toEqual([mockSupplier]);
     });
   });

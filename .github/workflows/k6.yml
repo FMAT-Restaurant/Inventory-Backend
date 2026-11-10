@@ -13,11 +13,6 @@ on:
           - api
           - events
           - all
-      reset_db:
-        description: 'Reiniciar la base de datos antes de cada suite'
-        required: false
-        default: true
-        type: boolean
 
 permissions:
   contents: read
@@ -40,7 +35,6 @@ jobs:
       RABBITMQ_URL: amqp://admin:supersecurepassword@localhost:5672
       RABBITMQ_USER: admin
       RABBITMQ_PASSWORD: supersecurepassword
-      K6_RESET_DB: ${{ format('{0}', inputs.reset_db) }}
 
     steps:
       - name: Checkout code

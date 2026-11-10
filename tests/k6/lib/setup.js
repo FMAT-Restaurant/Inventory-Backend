@@ -1,21 +1,10 @@
-import { RESET_DB } from '../config/env.js';
 import {
   batchPayload,
   itemPayload,
   recipePayload,
   supplierPayload,
 } from './data.js';
-import { del, expectStatus, json, post } from './http.js';
-
-export function resetDatabaseIfRequested() {
-  if (!RESET_DB) {
-    return null;
-  }
-
-  const res = del('/apo/test/reset', { tag: 'setup/reset' });
-  expectStatus(res, 200, 'reset database');
-  return res;
-}
+import { expectStatus, json, post } from './http.js';
 
 export function createSupplier(overrides = {}) {
   const res = post('/suppliers', supplierPayload(overrides), {
@@ -55,8 +44,6 @@ export function seedCatalog({
   withRecipe = true,
   withSupplier = false,
 } = {}) {
-  resetDatabaseIfRequested();
-
   const supplier = withSupplier ? createSupplier() : null;
   const createdItems = [];
 

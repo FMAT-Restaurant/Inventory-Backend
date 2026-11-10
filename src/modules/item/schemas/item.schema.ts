@@ -13,10 +13,10 @@ export enum EstadoUmbral {
   toObject: { virtuals: true },
 })
 export class Item extends Document {
-  @Prop({ required: true, trim: true, unique: true })
+  @Prop({ required: true, trim: true })
   sku: string; // Ej: 'ING-0001', 'ING-0002'
 
-  @Prop({ required: true, trim: true, unique: true })
+  @Prop({ required: true, trim: true })
   name: string;
 
   @Prop({ required: false, trim: true })
@@ -69,6 +69,23 @@ export class Item extends Document {
 export const ItemSchema = SchemaFactory.createForClass(Item);
 
 ItemSchema.index({ isActive: 1 });
+
+// SKU y nombre son únicos sin distinguir mayúsculas y solo entre items
+// activos: un item dado de baja libera su SKU y su nombre.
+const UNIQUE_ACTIVE_OPTIONS = {
+  unique: true,
+  collation: { locale: 'en', strength: 2 },
+  partialFilterExpression: { isActive: true },
+} as const;
+
+ItemSchema.index(
+  { sku: 1 },
+  { ...UNIQUE_ACTIVE_OPTIONS, name: 'sku_unique_active_ci' },
+);
+ItemSchema.index(
+  { name: 1 },
+  { ...UNIQUE_ACTIVE_OPTIONS, name: 'name_unique_active_ci' },
+);
 
 ItemSchema.virtual('supplierSugested', {
   ref: 'Supplier',

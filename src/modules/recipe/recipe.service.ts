@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -48,6 +49,49 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
     // Cuando cambia un item, recalculamos y publicamos la
     // disponibilidad de las recetas que lo usan
     this.itemChangeEmitter.on(ITEM_CHANGED_EVENT, this.handleItemChanged);
+    // Un item usado por alguna receta no puede darse de baja
+    this.itemService.registerRemovalGuard((itemId) =>
+      this.describeRecipesUsingItem(itemId),
+    );
+  }
+
+  private async describeRecipesUsingItem(
+    itemId: string,
+  ): Promise<string | null> {
+    const recipes = await this.recipeModel
+      .find({ 'items.itemId': new Types.ObjectId(itemId) })
+      .exec();
+    if (recipes.length === 0) {
+      return null;
+    }
+
+    const names = recipes
+      .slice(0, 3)
+      .map((recipe) => `'${recipe.name}'`)
+      .join(', ');
+    const extra = recipes.length > 3 ? ` y ${recipes.length - 3} más` : '';
+    return `No se puede eliminar el item: lo usan ${recipes.length} receta(s) (${names}${extra}). Quítalo de esas recetas primero.`;
+  }
+
+  /**
+   * Convierte las líneas recibidas en items de receta. Si un mismo item llega
+   * en varias líneas, se guarda una sola con la suma de sus cantidades.
+   */
+  private toRecipeItems(
+    lines: { itemId: string; requiredQuantity: number }[],
+  ): { itemId: Types.ObjectId; requiredQuantity: number }[] {
+    const totals = new Map<string, number>();
+    for (const line of lines) {
+      totals.set(
+        line.itemId,
+        (totals.get(line.itemId) ?? 0) + Number(line.requiredQuantity),
+      );
+    }
+
+    return Array.from(totals.entries()).map(([itemId, quantity]) => ({
+      itemId: new Types.ObjectId(itemId),
+      requiredQuantity: Math.round(quantity * 10000) / 10000,
+    }));
   }
 
   onModuleDestroy(): void {
@@ -72,10 +116,7 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
 
     if (recipe) {
       recipe.name = createDto.name;
-      recipe.items = createDto.items.map((item) => ({
-        itemId: new Types.ObjectId(item.itemId),
-        requiredQuantity: item.requiredQuantity,
-      })) as any;
+      recipe.items = this.toRecipeItems(createDto.items) as any;
       await recipe.save();
     } else {
       isNew = true;
@@ -83,10 +124,7 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
         recipe = new this.recipeModel({
           plateId: createDto.plateId,
           name: createDto.name,
-          items: createDto.items.map((item) => ({
-            itemId: new Types.ObjectId(item.itemId),
-            requiredQuantity: item.requiredQuantity,
-          })),
+          items: this.toRecipeItems(createDto.items),
         });
         await recipe.save();
       } catch (error) {
@@ -142,14 +180,15 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
     idOrPlateId: string,
     updateDto: UpdateRecipeDto,
   ): Promise<RecipeResponseDto> {
+    if (Object.keys(updateDto).length === 0) {
+      throw new BadRequestException('No hay campos para actualizar');
+    }
+
     const recipe = await this.findEntityByIdOrPlateId(idOrPlateId);
 
     if (updateDto.items && updateDto.items.length > 0) {
       await this.validateAndFetchItems(updateDto.items.map((i) => i.itemId));
-      recipe.items = updateDto.items.map((item) => ({
-        itemId: new Types.ObjectId(item.itemId),
-        requiredQuantity: item.requiredQuantity,
-      })) as any;
+      recipe.items = this.toRecipeItems(updateDto.items) as any;
     }
 
     if (updateDto.name !== undefined) {
@@ -376,6 +415,17 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
     let maxPortions = recipe.items.length > 0 ? Infinity : 0;
     let productionCost = 0;
 
+    // Recetas guardadas antes de unificar líneas pueden repetir un item: la
+    // disponibilidad se evalúa contra el total requerido de ese item.
+    const requiredByItem = new Map<string, number>();
+    for (const recipeItem of recipe.items) {
+      const key = recipeItem.itemId.toString();
+      requiredByItem.set(
+        key,
+        (requiredByItem.get(key) ?? 0) + recipeItem.requiredQuantity,
+      );
+    }
+
     const itemDetails: RecipeItemDetailResponseDto[] = recipe.items.map(
       (recipeItem) => {
         const itemId = recipeItem.itemId.toString();
@@ -397,16 +447,16 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
         const cost = itemInfo?.averageCost ?? itemInfo?.cost ?? 0;
         const name = item?.name ?? 'Desconocido';
         const unit = item?.unit ?? '';
-        const hasSufficient = stock >= recipeItem.requiredQuantity;
+        const totalRequired =
+          requiredByItem.get(itemId) ?? recipeItem.requiredQuantity;
+        const hasSufficient = stock >= totalRequired;
 
         if (!hasSufficient) {
           isAvailable = false;
         }
 
         const itemPortions =
-          recipeItem.requiredQuantity > 0
-            ? Math.floor(stock / recipeItem.requiredQuantity)
-            : 0;
+          totalRequired > 0 ? Math.floor(stock / totalRequired) : 0;
         if (itemPortions < maxPortions) {
           maxPortions = itemPortions;
         }

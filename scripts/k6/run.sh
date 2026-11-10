@@ -76,28 +76,8 @@ run_docker_compose() {
     -f "${ROOT_DIR}/compose.loadtest.yaml"
   )
 
-  reset_app_database() {
-    echo "==> Limpiando base de datos antes de recrear índices"
-    "${compose[@]}" exec -T app node -e \
-      "fetch('http://127.0.0.1:8083/apo/test/reset', { method: 'DELETE' }).then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1));"
-  }
-
-  restart_app() {
-    echo "==> Reiniciando app para recrear índices tras reset"
-    "${compose[@]}" restart app >/dev/null
-    "${compose[@]}" up -d --wait app >/dev/null
-  }
-
   if [ "${K6_COMPOSE_UP:-true}" = "true" ]; then
     "${compose[@]}" up -d --build --wait
-  fi
-
-  # El reset de la app usa dropDatabase(), que elimina los índices únicos.
-  # Limpiar y reiniciar la app los recrea antes de las suites que validan
-  # conflictos (409).
-  if [ "${K6_RESET_DB:-false}" = "true" ]; then
-    reset_app_database
-    restart_app
   fi
 
   for file in "${FILES[@]}"; do
@@ -109,10 +89,6 @@ run_docker_compose() {
       --summary-export "/scripts/out/${name}.json" \
       --summary-trend-stats "avg,min,med,p(90),p(95),p(99),max" \
       "/scripts/${file}"
-
-    if [ "${K6_RESET_DB:-false}" = "true" ]; then
-      restart_app
-    fi
   done
 }
 

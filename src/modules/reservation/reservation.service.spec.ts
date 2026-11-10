@@ -39,6 +39,7 @@ describe('ReservationService', () => {
     findOne: ReturnType<typeof vi.fn>;
     reserveStock: ReturnType<typeof vi.fn>;
     adjustReservedStock: ReturnType<typeof vi.fn>;
+    registerRemovalGuard: ReturnType<typeof vi.fn>;
   };
   let publisher: { publish: ReturnType<typeof vi.fn> };
   let recipeModel: { findOne: ReturnType<typeof vi.fn> };
@@ -76,6 +77,7 @@ describe('ReservationService', () => {
       findOne: vi.fn(),
       reserveStock: vi.fn(),
       adjustReservedStock: vi.fn().mockResolvedValue({}),
+      registerRemovalGuard: vi.fn(),
     };
     publisher = { publish: vi.fn().mockResolvedValue(undefined) };
     recipeModel = { findOne: vi.fn().mockReturnValue({ exec: recipeFindExec }) };
@@ -953,6 +955,40 @@ describe('ReservationService', () => {
           }
         ).aggregateItems('invalido'),
       ).toEqual({ valid: [], invalid: [] });
+    });
+  });
+
+  describe('regla de baja de items', () => {
+    const countExec = vi.fn();
+
+    beforeEach(() => {
+      model.countDocuments = vi.fn().mockReturnValue({ exec: countExec });
+      service.onModuleInit();
+    });
+
+    function registeredGuard(): (itemId: string) => Promise<string | null> {
+      return itemService.registerRemovalGuard.mock.calls[0][0];
+    }
+
+    it('impide la baja de un item con reservas activas', async () => {
+      countExec.mockResolvedValue(2);
+
+      await expect(registeredGuard()(ITEM_A)).resolves.toContain(
+        'tiene 2 reserva(s) activa(s)',
+      );
+      expect(model.countDocuments).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: {
+            $in: [ReservationStatus.PENDING, ReservationStatus.CONFIRMED],
+          },
+        }),
+      );
+    });
+
+    it('permite la baja si el item no tiene reservas activas', async () => {
+      countExec.mockResolvedValue(0);
+
+      await expect(registeredGuard()(ITEM_A)).resolves.toBeNull();
     });
   });
 });

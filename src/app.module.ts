@@ -8,7 +8,6 @@ import { SuppliersModule } from './modules/suppliers/supplier.module.js';
 import { RecipeModule } from './modules/recipe/recipe.module.js';
 import { StockMovementModule } from './modules/stock-movement/stock-movement.module.js';
 import { ReservationModule } from './modules/reservation/reservation.module.js';
-import { TestModule } from './modules/test/test.module.js';
 
 @Module({
   imports: [
@@ -19,7 +18,6 @@ import { TestModule } from './modules/test/test.module.js';
     RecipeModule,
     StockMovementModule,
     ReservationModule,
-    TestModule,
   ],
   controllers: [AppController],
   providers: [AppService],
