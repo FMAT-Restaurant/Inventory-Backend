@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model, Types } from 'mongoose';
 import { ItemService } from '../item/item.service.js';
@@ -14,6 +19,7 @@ import {
 import { QueryReservationsDto } from './dto/query-reservations.dto.js';
 import { ReservationCacheService } from './reservation-cache.service.js';
 import {
+  ACTIVE_RESERVATION_STATUSES,
   ReservationStatus,
   StockReservation,
 } from './schemas/stock-reservation.schema.js';
@@ -68,7 +74,7 @@ function availableStockOf(item: Item): number {
 }
 
 @Injectable()
-export class ReservationService {
+export class ReservationService implements OnModuleInit {
   private readonly logger = new Logger(ReservationService.name);
 
   constructor(
@@ -83,6 +89,28 @@ export class ReservationService {
     private readonly batchService: BatchService,
     private readonly stockMovementService: StockMovementService,
   ) {}
+
+  onModuleInit(): void {
+    // Un item con reservas activas no puede darse de baja
+    this.itemService.registerRemovalGuard((itemId) =>
+      this.describeActiveReservationsOfItem(itemId),
+    );
+  }
+
+  private async describeActiveReservationsOfItem(
+    itemId: string,
+  ): Promise<string | null> {
+    const active = await this.reservationModel
+      .countDocuments({
+        status: { $in: [...ACTIVE_RESERVATION_STATUSES] },
+        'items.itemId': new Types.ObjectId(itemId),
+      })
+      .exec();
+    if (active === 0) {
+      return null;
+    }
+    return `No se puede eliminar el item: tiene ${active} reserva(s) activa(s) de órdenes. Espera a que se sirvan, cancelen o expiren.`;
+  }
 
   /**
    * Crea una reserva idempotente por `orderId`. Si no hay stock suficiente no

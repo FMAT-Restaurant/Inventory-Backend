@@ -52,7 +52,6 @@ También puedes ejecutar una suite o un archivo concreto:
 ./scripts/k6/run.sh api
 ./scripts/k6/run.sh events
 ./scripts/k6/run.sh api/smoke.js
-K6_RESET_DB=true ./scripts/k6/run.sh all
 ```
 
 Para no volver a ejecutar `docker compose up` en cada corrida:
@@ -81,7 +80,6 @@ Linux llamado `bin/k6-linux`, que no se ejecuta de forma nativa).
 | --- | --- | --- |
 | `K6_BASE_URL` | `http://localhost:8083` | URL base de la API para k6 nativo |
 | `K6_RABBITMQ_URL` | `amqp://admin:supersecurepassword@localhost:5672` | AMQP para eventos |
-| `K6_RESET_DB` | `false` | Reinicia la BD antes de cada suite (destructivo) |
 | `K6_AUTH_TOKEN` | vacío | Envía `Authorization: Bearer <token>` si se define |
 | `K6_POLL_TIMEOUT_MS` | `10000` | Espera máxima de asincronía |
 | `K6_POLL_INTERVAL_MS` | `250` | Intervalo de polling |
@@ -92,15 +90,6 @@ Linux llamado `bin/k6-linux`, que no se ejecuta de forma nativa).
 
 En Docker Compose, `K6_BASE_URL` y `K6_RABBITMQ_URL` se fuerzan a los nombres de
 servicio (`app` y `rabbitmq`). En modo nativo se leen de tu shell.
-
-`K6_RESET_DB=true` llama a `DELETE /apo/test/reset`. Ese endpoint solo existe en
-`development`/`qa` y borra la base de datos. No lo uses contra producción.
-
-El endpoint usa `dropDatabase()`, que también elimina los índices únicos. En modo
-Docker, `scripts/k6/run.sh` limpia la BD y reinicia `app` al inicio y después de
-cada archivo para recrear los índices antes de las suites que validan conflictos
-(`409`). En modo nativo, reinicia la app manualmente después de un reset antes de
-ejecutar `items-crud` o `suppliers-crud`.
 
 ## Escenarios
 
@@ -160,7 +149,8 @@ ejecutar `items-crud` o `suppliers-crud`.
 - Si ejecutas eventos con más de una VU, el listener AMQP puede consumir
   mensajes de forma no determinista. Mantén `vus: 1`.
 - Algunos fallos de aserción dejan datos creados (items inactivos, lotes,
-  recetas). Usa `K6_RESET_DB=true` para limpiar entre corridas.
+  recetas). Para partir de una base limpia, recrea el volumen de MongoDB
+  (ver Limpieza).
 
 ## Limpieza
 

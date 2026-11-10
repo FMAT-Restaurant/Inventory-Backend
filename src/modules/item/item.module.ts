@@ -6,12 +6,14 @@ import { Item, ItemSchema } from './schemas/item.schema.js';
 import { ItemChangeEmitter } from './item-change.emitter.js';
 import { ItemEvents } from './item.events.js';
 import { BrokerModule } from '../../broker/broker.module.js';
+import { SuppliersModule } from '../suppliers/supplier.module.js';
 
 @Module({
   imports: [
     // Registramos el esquema para este módulo
     MongooseModule.forFeature([{ name: Item.name, schema: ItemSchema }]),
     BrokerModule,
+    SuppliersModule,
   ],
   controllers: [ItemsController],
   providers: [ItemService, ItemChangeEmitter, ItemEvents],

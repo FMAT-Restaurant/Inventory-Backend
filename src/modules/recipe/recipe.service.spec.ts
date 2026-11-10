@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
-import { Logger, NotFoundException } from '@nestjs/common';
+import { Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { RecipeService } from './recipe.service.js';
 import { Recipe } from './schemas/recipe.schema.js';
@@ -104,6 +104,7 @@ describe('RecipeService', () => {
   const mockItemService = {
     findOne: vi.fn(),
     findAll: vi.fn(),
+    registerRemovalGuard: vi.fn(),
   };
 
   const mockPublisher = {
@@ -516,6 +517,77 @@ describe('RecipeService', () => {
       );
       expect(recipe.lastKnownAvailability).toBe(true);
       warnSpy.mockRestore();
+    });
+  });
+
+  describe('insumos repetidos', () => {
+    it('unifica en una sola línea las cantidades de un insumo repetido', async () => {
+      mockExecFindOne.mockResolvedValue(null);
+
+      const result = await service.registerOrUpdate({
+        plateId: 'PLATE-DUP',
+        name: 'Doble',
+        items: [
+          { itemId: mockItemId1, requiredQuantity: 0.1 },
+          { itemId: mockItemId1, requiredQuantity: 0.2 },
+        ],
+      });
+
+      expect(result.recipe.items).toHaveLength(1);
+      expect(result.recipe.items[0].requiredQuantity).toBe(0.3);
+    });
+
+    it('evalúa la disponibilidad contra el total requerido en recetas antiguas con líneas repetidas', async () => {
+      mockItemService.findOne.mockResolvedValue({
+        _id: mockItemId1,
+        name: 'Queso',
+        unit: 'g',
+        availableStock: 1000,
+        averageCost: 1,
+      });
+      mockExecFindById.mockResolvedValue(
+        buildRecipe({
+          items: [
+            { itemId: new Types.ObjectId(mockItemId1), requiredQuantity: 600 },
+            { itemId: new Types.ObjectId(mockItemId1), requiredQuantity: 600 },
+          ],
+        }),
+      );
+
+      const recipe = await service.findOne(mockRecipeId);
+
+      expect(recipe.isAvailable).toBe(false);
+      expect(recipe.maxPreparablePortions).toBe(0);
+      expect(recipe.items.every((i) => !i.hasSufficientStock)).toBe(true);
+    });
+  });
+
+  describe('update', () => {
+    it('rechaza una actualización sin campos', async () => {
+      await expect(service.update('PLATE-001', {})).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(mockSave).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('regla de baja de items', () => {
+    function registeredGuard(): (itemId: string) => Promise<string | null> {
+      return mockItemService.registerRemovalGuard.mock.calls[0][0];
+    }
+
+    it('impide la baja de un item usado por recetas', async () => {
+      mockExecFind.mockResolvedValue([buildRecipe()]);
+
+      await expect(registeredGuard()(mockItemId1)).resolves.toContain(
+        "lo usan 1 receta(s) ('Hamburguesa')",
+      );
+    });
+
+    it('permite la baja si ninguna receta usa el item', async () => {
+      mockExecFind.mockResolvedValue([]);
+
+      await expect(registeredGuard()(mockItemId1)).resolves.toBeNull();
     });
   });
 });

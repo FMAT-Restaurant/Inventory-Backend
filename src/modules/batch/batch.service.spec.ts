@@ -1,10 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { BatchService } from './batch.service.js';
 import { Batch, BatchStatus } from './schemas/batch.schema.js';
 import { ItemService } from '../item/item.service.js';
+import { SupplierService } from '../suppliers/supplier.service.js';
 import { StockMovementService } from '../stock-movement/stock-movement.service.js';
 import { StockMovementType } from '../stock-movement/schemas/stock-movement.schema.js';
 
@@ -16,6 +21,7 @@ describe('BatchService', () => {
   const mockExecFindById = vi.fn();
   const mockExecFindByIdAndUpdate = vi.fn();
   const mockExecDeleteOne = vi.fn();
+  const mockExecUpdateOne = vi.fn();
   const mockSave = vi.fn();
 
   const mockBatchId = '507f1f77bcf86cd799439011';
@@ -59,6 +65,7 @@ describe('BatchService', () => {
     .fn()
     .mockReturnValue({ exec: mockExecFindByIdAndUpdate });
   MockModel.deleteOne = vi.fn().mockReturnValue({ exec: mockExecDeleteOne });
+  MockModel.updateOne = vi.fn().mockReturnValue({ exec: mockExecUpdateOne });
 
   const mockItemService = {
     findOne: vi.fn().mockResolvedValue({ _id: mockItemId }),
@@ -67,6 +74,10 @@ describe('BatchService', () => {
 
   const mockStockMovementService = {
     record: vi.fn().mockResolvedValue({}),
+  };
+
+  const mockSupplierService = {
+    assertAssignable: vi.fn().mockResolvedValue(undefined),
   };
 
   beforeEach(async () => {
@@ -91,6 +102,10 @@ describe('BatchService', () => {
         {
           provide: StockMovementService,
           useValue: mockStockMovementService,
+        },
+        {
+          provide: SupplierService,
+          useValue: mockSupplierService,
         },
       ],
     }).compile();
@@ -234,6 +249,20 @@ describe('BatchService', () => {
       expect(result.status).toBe(expectedStatus);
     });
 
+    it('debería rechazar un proveedor inexistente o dado de baja', async () => {
+      mockSupplierService.assertAssignable.mockRejectedValueOnce(
+        new NotFoundException(),
+      );
+
+      await expect(
+        service.create({ ...mockCreateDto, supplierId: mockBatchId }),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockSupplierService.assertAssignable).toHaveBeenCalledWith(
+        mockBatchId,
+      );
+      expect(mockSave).not.toHaveBeenCalled();
+    });
+
     it('debería lanzar ConflictException si el numero de lote ya existe', async () => {
       const duplicateKeyError = Object.assign(
         new Error('E11000 duplicate key'),
@@ -274,6 +303,13 @@ describe('BatchService', () => {
       await expect(service.update(mockBatchId, updateDto)).rejects.toThrow(
         NotFoundException,
       );
+    });
+
+    it('debería lanzar BadRequestException si no hay campos para actualizar', async () => {
+      await expect(
+        service.update(mockBatchId, { reason: undefined, createdBy: undefined }),
+      ).rejects.toThrow(BadRequestException);
+      expect(MockModel.findByIdAndUpdate).not.toHaveBeenCalled();
     });
   });
 
@@ -540,6 +576,68 @@ describe('BatchService', () => {
       };
 
       await expect(service.onModuleInit()).resolves.toBeUndefined();
+    });
+  });
+
+  describe('syncExpiredStatuses', () => {
+    const now = new Date('2026-11-10T15:00:00.000Z');
+
+    it('marca como vencidos los lotes cuya fecha ya pasó y recalcula el stock del item', async () => {
+      const expired = {
+        ...mockBatch,
+        _id: 'lote-vencido',
+        expirationDate: new Date('2026-11-09'),
+        status: BatchStatus.ACTIVE,
+      };
+      mockExecFind
+        .mockResolvedValueOnce([expired])
+        // Lotes del item al recalcular su stock
+        .mockResolvedValueOnce([expired]);
+
+      await expect(service.syncExpiredStatuses(now)).resolves.toBe(1);
+
+      expect(MockModel.find).toHaveBeenCalledWith({
+        status: { $in: [BatchStatus.ACTIVE, BatchStatus.EXPIRES_TODAY] },
+        expirationDate: { $lt: new Date('2026-11-11T00:00:00.000Z') },
+      });
+      expect(MockModel.updateOne).toHaveBeenCalledWith(
+        { _id: 'lote-vencido' },
+        { status: BatchStatus.EXPIRED },
+      );
+      expect(itemService.updateStockAndCost).toHaveBeenCalledWith(
+        mockItemId,
+        0,
+        undefined,
+      );
+    });
+
+    it('no toca los lotes cuyo estado ya es correcto', async () => {
+      mockExecFind.mockResolvedValueOnce([
+        {
+          ...mockBatch,
+          expirationDate: new Date(),
+          status: BatchStatus.EXPIRES_TODAY,
+        },
+      ]);
+
+      await expect(service.syncExpiredStatuses()).resolves.toBe(0);
+      expect(MockModel.updateOne).not.toHaveBeenCalled();
+      expect(itemService.updateStockAndCost).not.toHaveBeenCalled();
+    });
+
+    it('continúa aunque falle el recálculo de un item', async () => {
+      mockExecFind.mockResolvedValueOnce([
+        {
+          ...mockBatch,
+          expirationDate: new Date('2026-11-09'),
+          status: BatchStatus.ACTIVE,
+        },
+      ]);
+      mockItemService.updateStockAndCost.mockRejectedValueOnce(
+        new Error('item caído'),
+      );
+
+      await expect(service.syncExpiredStatuses(now)).resolves.toBe(1);
     });
   });
 });

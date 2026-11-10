@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -12,6 +13,7 @@ import { Batch, BatchStatus } from './schemas/batch.schema.js';
 import { CreateBatchDto } from './dto/create-batch.dto.js';
 import { UpdateBatchDto } from './dto/update-batch.dto.js';
 import { ItemService } from '../item/item.service.js';
+import { SupplierService } from '../suppliers/supplier.service.js';
 import {
   RecordStockMovementInput,
   StockMovementService,
@@ -28,6 +30,7 @@ export class BatchService implements OnModuleInit {
     @InjectModel(Batch.name) private batchModel: Model<Batch>,
     private readonly itemService: ItemService,
     private readonly stockMovementService: StockMovementService,
+    private readonly supplierService: SupplierService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -40,6 +43,10 @@ export class BatchService implements OnModuleInit {
 
   async create(createDto: CreateBatchDto): Promise<Batch> {
     const item = await this.itemService.findOne(createDto.itemId);
+    // Un lote nuevo solo puede asignarse a un proveedor activo
+    if (createDto.supplierId) {
+      await this.supplierService.assertAssignable(createDto.supplierId);
+    }
 
     const batchNumber = this.buildBatchNumber(createDto.batchNumber, item?.sku);
     const status = this.computeStatus(
@@ -162,6 +169,12 @@ export class BatchService implements OnModuleInit {
   }
 
   async update(id: string, updateDto: UpdateBatchDto): Promise<Batch> {
+    // `reason` y `createdBy` se declaran en el DTO y existen como claves
+    // aunque no se envíen, por eso se revisan los valores y no las claves.
+    if (Object.values(updateDto).every((value) => value === undefined)) {
+      throw new BadRequestException('No hay campos para actualizar');
+    }
+
     const currentBatch = await this.findOne(id);
     const { reason, createdBy, ...batchChanges } = updateDto;
 
@@ -226,6 +239,51 @@ export class BatchService implements OnModuleInit {
         error instanceof Error ? error.stack : String(error),
       );
     }
+  }
+
+  /**
+   * Actualiza el estado de los lotes cuya fecha de caducidad ya llegó o pasó
+   * y recalcula el stock de sus items, para que un lote vencido deje de
+   * contar como disponible sin esperar a que alguien lo edite.
+   * Devuelve cuántos lotes cambiaron de estado.
+   */
+  async syncExpiredStatuses(now = new Date()): Promise<number> {
+    const startOfTomorrow = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
+    );
+
+    const candidates = await this.batchModel
+      .find({
+        status: { $in: [BatchStatus.ACTIVE, BatchStatus.EXPIRES_TODAY] },
+        expirationDate: { $lt: startOfTomorrow },
+      })
+      .exec();
+
+    const affectedItemIds = new Set<string>();
+    let changed = 0;
+
+    for (const batch of candidates) {
+      const status = this.computeStatus(batch.quantity, batch.expirationDate);
+      if (status === batch.status) {
+        continue;
+      }
+      await this.batchModel.updateOne({ _id: batch._id }, { status }).exec();
+      affectedItemIds.add(String(batch.itemId));
+      changed += 1;
+    }
+
+    for (const itemId of affectedItemIds) {
+      try {
+        await this.syncItemStockAndCost(itemId);
+      } catch (error) {
+        this.logger.error(
+          `No se pudo recalcular el stock del item '${itemId}' tras el vencimiento de sus lotes`,
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
+    }
+
+    return changed;
   }
 
   private async syncItemStockAndCost(itemId: string): Promise<void> {

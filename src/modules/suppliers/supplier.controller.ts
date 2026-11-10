@@ -1,4 +1,13 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiConflictResponse,
@@ -12,6 +21,7 @@ import {
 import { SupplierService } from './supplier.service.js';
 import { CreateSupplierDto } from './dto/create-supplier.dto.js';
 import { UpdateSupplierDto } from './dto/update-supplier.dto.js';
+import { QuerySuppliersDto } from './dto/query-suppliers.dto.js';
 
 @ApiTags('suppliers')
 @Controller('suppliers')
@@ -28,10 +38,14 @@ export class SuppliersController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Obtener la lista completa de proveedores' })
+  @ApiOperation({
+    summary: 'Obtener la lista de proveedores',
+    description:
+      'Devuelve los proveedores activos. Con includeInactive=true incluye también los dados de baja.',
+  })
   @ApiOkResponse({ description: 'Lista de proveedores obtenida con éxito' })
-  findAll() {
-    return this.supplierService.findAll();
+  findAll(@Query() query: QuerySuppliersDto) {
+    return this.supplierService.findAll(query);
   }
 
   @Get(':id')

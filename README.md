@@ -361,7 +361,7 @@ npm run k6:events
 
 En macOS no necesitas instalar k6: los scripts ejecutan k6 dentro de Docker Compose con la extensión AMQP. En Linux puedes compilar un binario nativo con `npm run k6:build`.
 
-El detalle de variables, umbrales y limitaciones está en `tests/k6/README.md`. No uses `K6_RESET_DB=true` fuera de desarrollo o qa: reinicia la base de datos.
+El detalle de variables, umbrales y limitaciones está en `tests/k6/README.md`.
 
 ### Contenedores y conexión
 
