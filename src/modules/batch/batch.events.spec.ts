@@ -38,8 +38,8 @@ describe('BatchEvents', () => {
         routingKey,
       ]),
     ).toEqual([
-      ['menu.topic', 'menu.plate.created'],
-      ['menu.topic', 'menu.plate.deleted'],
+      ['menu.topic', 'menu.source.created'],
+      ['menu.topic', 'menu.source.deleted'],
     ]);
     for (const { handler } of subscriptions.all) {
       expect(handler({ plateId: 'P-1' })).toBeUndefined();

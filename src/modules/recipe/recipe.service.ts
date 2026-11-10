@@ -196,10 +196,10 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
     // La receta ya no existe: avisamos al menú que no está disponible
     await this.publishAvailabilityChanged({
       plateId: recipe.plateId,
-      name: recipe.name,
+      //name: recipe.name,
       isAvailable: false,
-      maxPreparablePortions: 0,
-      productionCost: 0,
+      //maxPreparablePortions: 0,
+      //productionCost: 0,
     });
   }
 
@@ -207,10 +207,10 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
     data: Pick<
       RecipeAvailabilityChangedEvent,
       | 'plateId'
-      | 'name'
+      //| 'name'
       | 'isAvailable'
-      | 'maxPreparablePortions'
-      | 'productionCost'
+      //| 'maxPreparablePortions'
+      //| 'productionCost'
     >,
   ): Promise<void> {
     const event: RecipeAvailabilityChangedEvent = {
@@ -256,7 +256,7 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
         const response = this.buildResponseDto(recipe, itemMap);
 
         await this.publishAvailabilityChanged(response);
-        await this.handleUnavailabilityTransition(recipe, response);
+        //await this.handleUnavailabilityTransition(recipe, response);
       } catch (error) {
         this.logger.error(
           `Error al recalcular disponibilidad de la receta '${recipe.plateId}' tras '${event.action}' del item '${event.itemId}':`,
