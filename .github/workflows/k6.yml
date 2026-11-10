@@ -1,0 +1,75 @@
+name: k6 Load Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Suite de k6 a ejecutar'
+        required: true
+        default: all
+        type: choice
+        options:
+          - smoke
+          - api
+          - events
+          - all
+      reset_db:
+        description: 'Reiniciar la base de datos antes de cada suite'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  loadtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    env:
+      MONGO_INITDB_ROOT_USERNAME: inventory
+      MONGO_INITDB_ROOT_PASSWORD: inventory_dev
+      MONGO_INITDB_DATABASE: inventory
+      NODE_ENV: development
+      FRONTEND_URL: http://localhost:5173
+      RABBITMQ_URL: amqp://admin:supersecurepassword@localhost:5672
+      RABBITMQ_USER: admin
+      RABBITMQ_PASSWORD: supersecurepassword
+      K6_RESET_DB: ${{ format('{0}', inputs.reset_db) }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Create CI environment file
+        run: |
+          cat > .env <<'EOF'
+          MONGO_INITDB_ROOT_USERNAME=inventory
+          MONGO_INITDB_ROOT_PASSWORD=inventory_dev
+          MONGO_INITDB_DATABASE=inventory
+          NODE_ENV=development
+          FRONTEND_URL=http://localhost:5173
+          RABBITMQ_URL=amqp://admin:supersecurepassword@localhost:5672
+          RABBITMQ_USER=admin
+          RABBITMQ_PASSWORD=supersecurepassword
+          EOF
+
+      - name: Run k6 suite
+        run: ./scripts/k6/run.sh "${{ inputs.suite }}"
+
+      - name: Upload k6 summaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-summaries
+          path: tests/k6/out
+          if-no-files-found: ignore
+
+      - name: Stop stack
+        if: always()
+        run: docker compose -f compose.yaml -f compose.loadtest.yaml down -v

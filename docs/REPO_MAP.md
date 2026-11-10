@@ -25,12 +25,15 @@
 
 - Unit tests: co-located with source as `*.spec.ts` (run with `npm test`)
 - E2E tests: `test/*.e2e-spec.ts` (run with `npm run test:e2e`, require MongoDB)
+- Load/event tests: `tests/k6/` (run with `npm run k6:smoke`, `k6:api`, `k6:events`; see `tests/k6/README.md`)
+- k6 helpers: `scripts/k6/build.sh` and `scripts/k6/run.sh`
+- Load-test overlay: `compose.loadtest.yaml` (RabbitMQ + app + k6 profile)
 
 ## Events
 
 | Exchange | Direction | Routing Keys / Queues | Notes |
 | --- | --- | --- | --- |
-| `menu.topic` | Consume | `menu.plate.created`, `menu.plate.updated`, `menu.plate.deleted` / `cola_recipe_events` | Consumed by `RecipeEvents` |
+| `menu.topic` | Consume | `menu.source.created`, `menu.source.updated`, `menu.source.deleted` / `cola_recipe_events` | Consumed by `RecipeEvents` |
 | `ordenes.topic` | Consume | `ordenes.order.created`, `.confirmed`, `.cancelled`, `.served` / `cola_orders_events` | Consumed by `OrdersEvents`; `served` pending Phase 2 |
 | `inventory.topic` | Publish | `inventory.recipe.availability-changed`, `inventory.recipe.not-available`, `inventory.reservation.*` | Published by `RecipeService` and `ReservationService` |
 | - | Queues | `cola_item_events`, `cola_batch_events`, `cola_orders_events` | Defined in conventions for subscription patterns |

@@ -21,7 +21,12 @@
     "test:debug": "vitest --inspect-brk --no-file-parallelism",
     "test:e2e": "vitest run --config ./vitest.config.e2e.ts",
     "prepare": "husky",
-    "openapi:generate": "npm run build && node dist/generate-openapi.js"
+    "openapi:generate": "npm run build && node dist/generate-openapi.js",
+    "k6:build": "bash scripts/k6/build.sh",
+    "k6:smoke": "bash scripts/k6/run.sh smoke",
+    "k6:api": "bash scripts/k6/run.sh api",
+    "k6:events": "bash scripts/k6/run.sh events",
+    "k6:all": "bash scripts/k6/run.sh all"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",
