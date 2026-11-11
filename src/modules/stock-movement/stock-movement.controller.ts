@@ -2,6 +2,8 @@ import { Controller, Get, Query } from '@nestjs/common';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { QueryStockMovementsDto } from './dto/query-stock-movements.dto.js';
 import { StockMovementService } from './stock-movement.service.js';
+import { RequiredPermissions } from '../../common/auth/auth.decorators.js';
+import { PERMISSIONS } from '../../common/auth/auth.types.js';
 
 @ApiTags('movements')
 @Controller('movements')
@@ -11,6 +13,7 @@ export class StockMovementController {
   ) {}
 
   @Get()
+  @RequiredPermissions(PERMISSIONS.MOVEMENTS_READ)
   @ApiOperation({
     summary: 'Consultar movimientos de inventario',
     description:

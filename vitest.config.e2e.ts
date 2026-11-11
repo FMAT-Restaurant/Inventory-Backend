@@ -17,6 +17,9 @@ export default defineConfig({
     include: ['**/*.e2e-spec.ts'],
     env: {
       MONGODB_URI: testUri,
+      // Los e2e de negocio no pasan por Kong. La autenticación se prueba
+      // de forma dedicada en test/auth.e2e-spec.ts con su propia app.
+      AUTH_ENABLED: 'false',
     },
   },
 });

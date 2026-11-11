@@ -9,6 +9,8 @@ import {
 import { QueryPendingSummaryDto } from './dto/query-pending-summary.dto.js';
 import { QueryReservationsDto } from './dto/query-reservations.dto.js';
 import { ReservationService } from './reservation.service.js';
+import { RequiredPermissions } from '../../common/auth/auth.decorators.js';
+import { PERMISSIONS } from '../../common/auth/auth.types.js';
 
 @ApiTags('reservations')
 @Controller('reservations')
@@ -16,6 +18,7 @@ export class ReservationController {
   constructor(private readonly reservationService: ReservationService) {}
 
   @Get()
+  @RequiredPermissions(PERMISSIONS.RESERVATIONS_READ)
   @ApiOperation({
     summary: 'Listar reservas de stock',
     description:
@@ -27,6 +30,7 @@ export class ReservationController {
   }
 
   @Get('pending/summary')
+  @RequiredPermissions(PERMISSIONS.RESERVATIONS_READ)
   @ApiOperation({
     summary: 'Resumen de stock apartado pendiente',
     description:
@@ -38,6 +42,7 @@ export class ReservationController {
   }
 
   @Get(':orderId')
+  @RequiredPermissions(PERMISSIONS.RESERVATIONS_READ)
   @ApiOperation({ summary: 'Obtener la reserva de una orden' })
   @ApiParam({ name: 'orderId', description: 'Referencia externa de la orden' })
   @ApiOkResponse({ description: 'Reserva obtenida con éxito' })

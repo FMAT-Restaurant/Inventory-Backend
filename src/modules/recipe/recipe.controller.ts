@@ -26,6 +26,11 @@ import { CreateRecipeDto } from './dto/create-recipe.dto.js';
 import { UpdateRecipeDto } from './dto/update-recipe.dto.js';
 import { QueryRecipesDto } from './dto/query-recipes.dto.js';
 import { RecipeResponseDto } from './dto/recipe-response.dto.js';
+import {
+  Blocked,
+  RequiredPermissions,
+} from '../../common/auth/auth.decorators.js';
+import { PERMISSIONS } from '../../common/auth/auth.types.js';
 
 @ApiTags('recipes')
 @Controller('recipes')
@@ -33,6 +38,7 @@ export class RecipeController {
   constructor(private readonly recipeService: RecipeService) {}
 
   @Post()
+  @Blocked('Las recetas se gestionan mediante eventos de Menú')
   @ApiOperation({
     summary: 'Registrar o actualizar una receta (idempotente por plateId)',
   })
@@ -63,6 +69,7 @@ export class RecipeController {
   }
 
   @Get()
+  @RequiredPermissions(PERMISSIONS.RECIPES_READ)
   @ApiOperation({
     summary:
       'Obtener el listado de recetas con cálculo de disponibilidad y costo en tiempo real',
@@ -76,6 +83,7 @@ export class RecipeController {
   }
 
   @Get(':id')
+  @RequiredPermissions(PERMISSIONS.RECIPES_READ)
   @ApiOperation({
     summary:
       'Obtener una receta con su detalle de disponibilidad por su ID (ObjectId) o plateId',
@@ -95,6 +103,7 @@ export class RecipeController {
   }
 
   @Patch(':id')
+  @Blocked('Las recetas se gestionan mediante eventos de Menú')
   @ApiOperation({ summary: 'Actualizar parcialmente una receta' })
   @ApiParam({
     name: 'id',
@@ -113,6 +122,7 @@ export class RecipeController {
   }
 
   @Delete(':id')
+  @Blocked('Las recetas se gestionan mediante eventos de Menú')
   @ApiOperation({ summary: 'Eliminar una receta' })
   @ApiParam({
     name: 'id',
