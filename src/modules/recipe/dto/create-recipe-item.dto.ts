@@ -1,5 +1,10 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsMongoId, IsNotEmpty, IsNumber, Min } from 'class-validator';
+import { IsMongoId, IsNotEmpty, IsNumber, Max, Min } from 'class-validator';
+import {
+  AMOUNT_DECIMALS,
+  MAX_QUANTITY,
+  MaxDecimals,
+} from '../../../common/validation.js';
 
 export class CreateRecipeItemDto {
   @ApiProperty({
@@ -16,7 +21,9 @@ export class CreateRecipeItemDto {
     minimum: 0.0001,
   })
   @IsNumber()
+  @MaxDecimals(AMOUNT_DECIMALS)
   @Min(0.0001)
+  @Max(MAX_QUANTITY)
   @IsNotEmpty()
   requiredQuantity: number;
 }

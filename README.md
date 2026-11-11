@@ -329,6 +329,8 @@ El workflow `.github/workflows/on_pr.yml` se ejecuta cuando se abre o actualiza 
 
 El workflow `.github/workflows/release.yml` se ejecuta al publicar un tag que coincida con `v*.*.*`, por ejemplo `v1.0.0`. Genera notas a partir de los commits mediante `scripts/changelog.sh`, genera `openapi.yml` con la versión del tag y crea un GitHub Release con ambos elementos.
 
+El workflow `.github/workflows/k6.yml` se ejecuta manualmente (`workflow_dispatch`) y permite elegir la suite de carga (`smoke`, `api`, `events` o `all`). Levanta MongoDB, la app y RabbitMQ con `compose.loadtest.yaml`, ejecuta k6 y publica los resúmenes como artefacto.
+
 ## 10. Cómo verificar la configuración
 
 ### Compilación y pruebas locales
@@ -346,6 +348,20 @@ Para las pruebas e2e con la base de datos levantada:
 docker compose up -d --wait db
 npm run test:e2e
 ```
+
+### Pruebas de carga y eventos (k6)
+
+Las pruebas de carga viven en `tests/k6/` y usan un stack aparte con RabbitMQ:
+
+```bash
+npm run k6:smoke
+npm run k6:api
+npm run k6:events
+```
+
+En macOS no necesitas instalar k6: los scripts ejecutan k6 dentro de Docker Compose con la extensión AMQP. En Linux puedes compilar un binario nativo con `npm run k6:build`.
+
+El detalle de variables, umbrales y limitaciones está en `tests/k6/README.md`.
 
 ### Contenedores y conexión
 

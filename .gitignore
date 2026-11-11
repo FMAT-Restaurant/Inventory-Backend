@@ -22,6 +22,10 @@ lerna-debug.log*
 # Tests
 /coverage
 /.nyc_output
+/bin/k6
+/bin/k6-linux
+/tests/k6/out/*
+!/tests/k6/out/.gitkeep
 
 # IDEs and editors
 /.idea

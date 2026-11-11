@@ -38,9 +38,20 @@ describe('ItemSchema', () => {
     expect(ItemSchema).toBeDefined();
   });
 
-  it('debería declarar name como único', () => {
-    expect(ItemSchema.path('name').options.unique).toBe(true);
-  });
+  it.each(['sku', 'name'])(
+    'debería declarar %s como único entre items activos sin distinguir mayúsculas',
+    (field) => {
+      const index = ItemSchema.indexes().find(
+        ([keys]) => Object.keys(keys).join() === field,
+      );
+
+      expect(index?.[1]).toMatchObject({
+        unique: true,
+        collation: { locale: 'en', strength: 2 },
+        partialFilterExpression: { isActive: true },
+      });
+    },
+  );
 
   it('debería referenciar la colección Supplier en supplierIdSugested', () => {
     expect(ItemSchema.path('supplierIdSugested').options.ref).toBe('Supplier');
