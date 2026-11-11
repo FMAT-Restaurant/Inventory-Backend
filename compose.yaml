@@ -20,6 +20,12 @@ services:
       NODE_ENV: ${NODE_ENV:-development}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5176}
       RABBITMQ_URL: ${RABBITMQ_URL:?Define RABBITMQ_URL en .env}
+      # Autenticación: en dev no hay gateway, así que por defecto queda
+      # deshabilitada. Cualquier valor distinto de false la habilita y
+      # entonces exige AUTH_JWT_SECRET (secreto compartido con Kong).
+      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-}
+      AUTH_JWT_ISSUER: ${AUTH_JWT_ISSUER:-}
     # Solo en dev se publica el puerto en el host. El puerto interno del
     # contenedor es 8083 en todos los ambientes: es el que espera el gateway.
     ports:

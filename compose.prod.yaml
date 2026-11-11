@@ -16,6 +16,11 @@ services:
   app:
     environment:
       NODE_ENV: ${NODE_ENV:-production}
+      # En producción el servicio solo es alcanzable vía Kong, que valida el
+      # access token y propaga X-User-*: la autenticación siempre va activa.
+      AUTH_ENABLED: ${AUTH_ENABLED:-true}
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?Define AUTH_JWT_SECRET en .env}
+      AUTH_JWT_ISSUER: ${AUTH_JWT_ISSUER:-}
     # `!reset` elimina el publish heredado del archivo base.
     ports: !reset []
     networks:

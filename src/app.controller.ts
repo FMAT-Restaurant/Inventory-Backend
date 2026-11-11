@@ -1,5 +1,6 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiOkResponse, ApiProduces, ApiTags } from '@nestjs/swagger';
+import { Public } from './common/auth/auth.decorators.js';
 import { AppService } from './app.service.js';
 
 @ApiTags('app')
@@ -8,6 +9,7 @@ export class AppController {
   constructor(private readonly appService: AppService) {}
 
   @Get()
+  @Public()
   @ApiProduces('text/html')
   @ApiOkResponse({
     description: 'La aplicación está disponible',

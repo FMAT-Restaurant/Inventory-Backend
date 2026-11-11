@@ -10,6 +10,9 @@ services:
     environment:
       # Las pruebas de carga se ejecutan en desarrollo/qa.
       NODE_ENV: development
+      # k6 no pasa por Kong ni propaga X-User-*: la autenticación va
+      # deshabilitada para el perfil de pruebas de carga.
+      AUTH_ENABLED: 'false'
       RABBITMQ_URL: "amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASSWORD:-supersecurepassword}@rabbitmq:5672"
     depends_on:
       rabbitmq:

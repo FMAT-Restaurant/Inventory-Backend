@@ -22,6 +22,8 @@ import { SupplierService } from './supplier.service.js';
 import { CreateSupplierDto } from './dto/create-supplier.dto.js';
 import { UpdateSupplierDto } from './dto/update-supplier.dto.js';
 import { QuerySuppliersDto } from './dto/query-suppliers.dto.js';
+import { RequiredPermissions } from '../../common/auth/auth.decorators.js';
+import { PERMISSIONS } from '../../common/auth/auth.types.js';
 
 @ApiTags('suppliers')
 @Controller('suppliers')
@@ -29,6 +31,7 @@ export class SuppliersController {
   constructor(private readonly supplierService: SupplierService) {}
 
   @Post()
+  @RequiredPermissions(PERMISSIONS.SUPPLIERS_WRITE)
   @ApiOperation({ summary: 'Crear un nuevo proveedor' })
   @ApiCreatedResponse({ description: 'Proveedor creado con éxito' })
   @ApiBadRequestResponse({ description: 'Datos de entrada inválidos' })
@@ -38,6 +41,7 @@ export class SuppliersController {
   }
 
   @Get()
+  @RequiredPermissions(PERMISSIONS.SUPPLIERS_READ)
   @ApiOperation({
     summary: 'Obtener la lista de proveedores',
     description:
@@ -49,6 +53,7 @@ export class SuppliersController {
   }
 
   @Get(':id')
+  @RequiredPermissions(PERMISSIONS.SUPPLIERS_READ)
   @ApiOperation({ summary: 'Obtener un proveedor por su ID' })
   @ApiParam({ name: 'id', description: 'ID único del proveedor (ObjectId)' })
   @ApiOkResponse({ description: 'Proveedor obtenido con éxito' })
@@ -58,6 +63,7 @@ export class SuppliersController {
   }
 
   @Patch(':id')
+  @RequiredPermissions(PERMISSIONS.SUPPLIERS_WRITE)
   @ApiOperation({ summary: 'Actualizar un proveedor' })
   @ApiParam({ name: 'id', description: 'ID único del proveedor' })
   @ApiOkResponse({ description: 'Proveedor actualizado con éxito' })
@@ -67,6 +73,7 @@ export class SuppliersController {
   }
 
   @Delete(':id')
+  @RequiredPermissions(PERMISSIONS.SUPPLIERS_WRITE)
   @ApiOperation({ summary: 'Eliminar un proveedor' })
   @ApiParam({ name: 'id', description: 'ID único del proveedor' })
   @ApiOkResponse({ description: 'Proveedor eliminado con éxito' })

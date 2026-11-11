@@ -22,6 +22,8 @@ import {
 import { BatchService } from './batch.service.js';
 import { CreateBatchDto } from './dto/create-batch.dto.js';
 import { UpdateBatchDto } from './dto/update-batch.dto.js';
+import { RequiredPermissions } from '../../common/auth/auth.decorators.js';
+import { PERMISSIONS } from '../../common/auth/auth.types.js';
 
 @ApiTags('batches')
 @Controller('batches')
@@ -29,6 +31,7 @@ export class BatchController {
   constructor(private readonly batchService: BatchService) {}
 
   @Post()
+  @RequiredPermissions(PERMISSIONS.BATCHES_WRITE)
   @ApiOperation({ summary: 'Crear un nuevo lote' })
   @ApiCreatedResponse({ description: 'Lote creado con éxito' })
   @ApiBadRequestResponse({ description: 'Datos de entrada inválidos' })
@@ -39,6 +42,7 @@ export class BatchController {
   }
 
   @Get()
+  @RequiredPermissions(PERMISSIONS.BATCHES_READ)
   @ApiOperation({ summary: 'Obtener la lista completa de lotes' })
   @ApiQuery({
     name: 'itemId',
@@ -51,6 +55,7 @@ export class BatchController {
   }
 
   @Get(':id')
+  @RequiredPermissions(PERMISSIONS.BATCHES_READ)
   @ApiOperation({ summary: 'Obtener un lote por su ID' })
   @ApiParam({ name: 'id', description: 'ID único del lote (ObjectId)' })
   @ApiOkResponse({ description: 'Lote obtenido con éxito' })
@@ -60,6 +65,7 @@ export class BatchController {
   }
 
   @Patch(':id')
+  @RequiredPermissions(PERMISSIONS.BATCHES_WRITE)
   @ApiOperation({ summary: 'Actualizar un lote' })
   @ApiParam({ name: 'id', description: 'ID único del lote' })
   @ApiOkResponse({ description: 'Lote actualizado con éxito' })
@@ -69,6 +75,7 @@ export class BatchController {
   }
 
   @Delete(':id')
+  @RequiredPermissions(PERMISSIONS.BATCHES_WRITE)
   @ApiOperation({ summary: 'Eliminar un lote' })
   @ApiParam({ name: 'id', description: 'ID único del lote' })
   @ApiOkResponse({ description: 'Lote eliminado con éxito' })

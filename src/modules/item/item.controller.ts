@@ -22,6 +22,8 @@ import { ItemService } from './item.service.js';
 import { CreateItemDto } from './dto/create-item.dto.js';
 import { UpdateItemDto } from './dto/update-item.dto.js';
 import { QueryItemsDto } from './dto/query-items.dto.js';
+import { RequiredPermissions } from '../../common/auth/auth.decorators.js';
+import { PERMISSIONS } from '../../common/auth/auth.types.js';
 
 @ApiTags('items')
 @Controller('items')
@@ -29,6 +31,7 @@ export class ItemsController {
   constructor(private readonly itemsService: ItemService) {}
 
   @Post()
+  @RequiredPermissions(PERMISSIONS.ITEMS_WRITE)
   @ApiOperation({ summary: 'Crear un nuevo item' })
   @ApiCreatedResponse({ description: 'Item creado con éxito' })
   @ApiBadRequestResponse({ description: 'Datos de entrada inválidos' })
@@ -38,6 +41,7 @@ export class ItemsController {
   }
 
   @Get()
+  @RequiredPermissions(PERMISSIONS.ITEMS_READ)
   @ApiOperation({
     summary: 'Obtener la lista de items',
     description:
@@ -49,6 +53,7 @@ export class ItemsController {
   }
 
   @Get(':id')
+  @RequiredPermissions(PERMISSIONS.ITEMS_READ)
   @ApiOperation({ summary: 'Obtener un item por su ID' })
   @ApiParam({ name: 'id', description: 'ID único del item (ObjectId)' })
   @ApiOkResponse({ description: 'Item obtenido con éxito' })
@@ -58,6 +63,7 @@ export class ItemsController {
   }
 
   @Patch(':id')
+  @RequiredPermissions(PERMISSIONS.ITEMS_WRITE)
   @ApiOperation({ summary: 'Actualizar un item' })
   @ApiParam({ name: 'id', description: 'ID único del item (ObjectId)' })
   @ApiOkResponse({ description: 'Item actualizado con éxito' })
@@ -69,6 +75,7 @@ export class ItemsController {
   }
 
   @Delete(':id')
+  @RequiredPermissions(PERMISSIONS.ITEMS_WRITE)
   @ApiOperation({
     summary: 'Desactivar un item',
     description:

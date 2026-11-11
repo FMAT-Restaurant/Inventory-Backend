@@ -6,6 +6,9 @@ import { createOpenApiConfig } from './openapi.config.js';
 
 // Generar el documento OpenAPI no requiere una conexión activa con MongoDB.
 process.env.MONGODB_URI ??= 'mongodb://127.0.0.1:27017/inventory';
+// Tampoco sirve tráfico ni valida tokens: la autenticación no aplica y no
+// debe exigir un secreto compartido.
+process.env.AUTH_ENABLED ??= 'false';
 
 const { AppModule } = await import('./app.module.js');
 const app = await NestFactory.create(AppModule, { logger: false });
