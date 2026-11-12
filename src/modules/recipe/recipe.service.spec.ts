@@ -100,6 +100,29 @@ describe('RecipeService', () => {
   MockModel.findOne = vi.fn().mockReturnValue({ exec: mockExecFindOne });
   MockModel.findById = vi.fn().mockReturnValue({ exec: mockExecFindById });
   MockModel.deleteOne = vi.fn().mockReturnValue({ exec: mockExecDeleteOne });
+  // Reclamo atómico de la transición disponible -> no disponible (RF-12).
+  // Simula el filtro `lastKnownAvailability: { $ne: false }` sobre un estado
+  // compartido por receta.
+  const availabilityState = new Map<string, boolean>();
+  MockModel.findOneAndUpdate = vi.fn((filter: { _id: Types.ObjectId }) => ({
+    exec: vi.fn(async () => {
+      const key = String(filter._id);
+      if (availabilityState.get(key) === false) return null;
+      availabilityState.set(key, false);
+      return { _id: filter._id, lastKnownAvailability: false };
+    }),
+  }));
+  MockModel.updateOne = vi.fn(
+    (
+      filter: { _id: Types.ObjectId },
+      update: { lastKnownAvailability: boolean },
+    ) => ({
+      exec: vi.fn(async () => {
+        availabilityState.set(String(filter._id), update.lastKnownAvailability);
+        return { modifiedCount: 1 };
+      }),
+    }),
+  );
 
   const mockItemService = {
     findOne: vi.fn(),
@@ -113,6 +136,7 @@ describe('RecipeService', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    availabilityState.clear();
     mockSave.mockResolvedValue({});
 
     mockItemService.findOne.mockImplementation((id: string) => {
@@ -391,8 +415,15 @@ describe('RecipeService', () => {
         );
       });
 
-      // El evento 'inventory.recipe.not-available' está desactivado
-      expect(getNotAvailableCalls()).toHaveLength(0);
+      await vi.waitFor(() => {
+        expect(getNotAvailableCalls()).toHaveLength(1);
+      });
+      expect(getNotAvailableCalls()[0][2]).toMatchObject({
+        plateId: 'PLATE-001',
+        limitingIngredients: [
+          expect.objectContaining({ itemId: mockItemId1, availableStock: 0 }),
+        ],
+      });
     });
 
     it('no publica si el item no pertenece a ninguna receta (AC-02)', async () => {
@@ -460,7 +491,7 @@ describe('RecipeService', () => {
       expect(recipe.lastKnownAvailability).toBe(true);
     });
 
-    it('no publica not-available aunque la receta siga sin stock (AC-05)', async () => {
+    it('emite not-available solo en la transición, no mientras siga sin stock (AC-05)', async () => {
       const recipe = buildRecipe();
       mockExecFind.mockResolvedValue([recipe]);
       mockItemService.findOne.mockResolvedValue({
@@ -485,8 +516,68 @@ describe('RecipeService', () => {
       await vi.waitFor(() => {
         expect(getAvailabilityCalls()).toHaveLength(2);
       });
+      await flushAsync();
 
-      expect(getNotAvailableCalls()).toHaveLength(0);
+      expect(getNotAvailableCalls()).toHaveLength(1);
+    });
+
+    it('vuelve a avisar si la receta se recupera y luego deja de ser preparable', async () => {
+      const recipe = buildRecipe();
+      mockExecFind.mockResolvedValue([recipe]);
+      const emitWithStock = async (stock: number, expectedCalls: number) => {
+        mockItemService.findOne.mockResolvedValue({
+          ...item1,
+          availableStock: stock,
+          totalStock: stock,
+          stock,
+        });
+        emitter.emit(ITEM_CHANGED_EVENT, {
+          itemId: mockItemId1,
+          action: 'updated',
+        });
+        await vi.waitFor(() => {
+          expect(getAvailabilityCalls()).toHaveLength(expectedCalls);
+        });
+        await flushAsync();
+      };
+
+      await emitWithStock(0, 1);
+      await emitWithStock(10, 2);
+      await emitWithStock(0, 3);
+
+      expect(getNotAvailableCalls()).toHaveLength(2);
+    });
+
+    it('si falla la publicación del aviso, lo reintenta en el siguiente cambio', async () => {
+      const recipe = buildRecipe();
+      mockExecFind.mockResolvedValue([recipe]);
+      mockItemService.findOne.mockResolvedValue({
+        ...item1,
+        availableStock: 0,
+        totalStock: 0,
+        stock: 0,
+      });
+      mockPublisher.publish.mockImplementation(
+        async (_exchange: string, routingKey: string) => {
+          if (routingKey === 'inventory.recipe.not-available') {
+            throw new Error('Broker caído');
+          }
+        },
+      );
+
+      emitter.emit(ITEM_CHANGED_EVENT, {
+        itemId: mockItemId1,
+        action: 'updated',
+      });
+      await vi.waitFor(() => expect(getNotAvailableCalls()).toHaveLength(1));
+      await flushAsync();
+
+      mockPublisher.publish.mockResolvedValue(undefined);
+      emitter.emit(ITEM_CHANGED_EVENT, {
+        itemId: mockItemId1,
+        action: 'updated',
+      });
+      await vi.waitFor(() => expect(getNotAvailableCalls()).toHaveLength(2));
     });
 
     it('registra el fallo de publicación sin fallar la operación (AC-06)', async () => {
@@ -588,6 +679,65 @@ describe('RecipeService', () => {
       mockExecFind.mockResolvedValue([]);
 
       await expect(registeredGuard()(mockItemId1)).resolves.toBeNull();
+    });
+  });
+
+  describe('recetas incompletas (por evento)', () => {
+    const missingId = '60d5ec9af682fbd39a1b8999';
+
+    it('guarda la receta como incompleta y emite una alerta en vez de descartarla', async () => {
+      mockExecFindOne.mockResolvedValue(null);
+
+      const { recipe } = await service.registerOrUpdate(
+        {
+          plateId: 'PLATE-INC',
+          name: 'Con faltante',
+          items: [
+            { itemId: mockItemId1, requiredQuantity: 1 },
+            { itemId: missingId, requiredQuantity: 1 },
+          ],
+        },
+        { allowMissingItems: true },
+      );
+
+      expect(recipe.isComplete).toBe(false);
+      expect(recipe.missingItemIds).toEqual([missingId]);
+      expect(recipe.isAvailable).toBe(false);
+      expect(mockPublisher.publish).toHaveBeenCalledWith(
+        'inventory.topic',
+        'inventory.recipe.incomplete',
+        expect.objectContaining({
+          plateId: 'PLATE-INC',
+          missingItemIds: [missingId],
+        }),
+      );
+    });
+
+    it('sin allowMissingItems sigue rechazando insumos inexistentes', async () => {
+      mockExecFindOne.mockResolvedValue(null);
+
+      await expect(
+        service.registerOrUpdate({
+          plateId: 'PLATE-INC',
+          name: 'Con faltante',
+          items: [{ itemId: missingId, requiredQuantity: 1 }],
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('una receta completa no emite alerta', async () => {
+      mockExecFindOne.mockResolvedValue(null);
+
+      const { recipe } = await service.registerOrUpdate(mockCreateDto, {
+        allowMissingItems: true,
+      });
+
+      expect(recipe.isComplete).toBe(true);
+      expect(mockPublisher.publish).not.toHaveBeenCalledWith(
+        'inventory.topic',
+        'inventory.recipe.incomplete',
+        expect.anything(),
+      );
     });
   });
 });

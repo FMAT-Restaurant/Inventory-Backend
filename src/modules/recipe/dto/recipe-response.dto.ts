@@ -84,6 +84,20 @@ export class RecipeResponseDto {
   })
   items: RecipeItemDetailResponseDto[];
 
+  @ApiProperty({
+    description:
+      'false cuando la receta referencia insumos que no existen en el catálogo',
+    example: true,
+  })
+  isComplete: boolean;
+
+  @ApiProperty({
+    description: 'IDs de insumos referenciados que no existen en el catálogo',
+    type: [String],
+    example: [],
+  })
+  missingItemIds: string[];
+
   @ApiPropertyOptional({
     description: 'Fecha de creación del registro',
   })

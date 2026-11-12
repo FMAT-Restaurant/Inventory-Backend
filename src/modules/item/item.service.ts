@@ -189,6 +189,23 @@ export class ItemService implements OnModuleInit {
     return this.itemModel.find(filter).exec();
   }
 
+  /**
+   * Items por id incluyendo los dados de baja. Se usa en historiales, donde
+   * un item eliminado debe seguir mostrando su nombre.
+   */
+  async findManyIncludingInactive(ids: string[]): Promise<Map<string, Item>> {
+    const validIds = Array.from(new Set(ids)).filter((id) =>
+      isValidObjectId(id),
+    );
+    if (validIds.length === 0) {
+      return new Map();
+    }
+    const items = await this.itemModel.find({ _id: { $in: validIds } }).exec();
+    return new Map(
+      items.map((item) => [(item._id as Types.ObjectId).toString(), item]),
+    );
+  }
+
   async findOne(id: string): Promise<Item> {
     if (!isValidObjectId(id)) {
       throw new NotFoundException(`Item con id '${id}' no encontrado`);

@@ -63,11 +63,14 @@ describe('RecipeEvents', () => {
       items: [{ id: 'I-1', quantity: 2 }],
     });
 
-    expect(registerOrUpdate).toHaveBeenCalledWith({
-      plateId: 'P-1',
-      name: 'Hamburguesa',
-      items: [{ itemId: 'I-1', requiredQuantity: 2 }],
-    });
+    expect(registerOrUpdate).toHaveBeenCalledWith(
+      {
+        plateId: 'P-1',
+        name: 'Hamburguesa',
+        items: [{ itemId: 'I-1', requiredQuantity: 2 }],
+      },
+      { allowMissingItems: true },
+    );
   });
 
   it.each([
@@ -94,11 +97,14 @@ describe('RecipeEvents', () => {
       name: 'Hamburguesa doble',
       items: [{ id: 'I-1', quantity: 3 }],
     });
-    expect(registerOrUpdate).toHaveBeenCalledWith({
-      plateId: 'P-1',
-      name: 'Hamburguesa doble',
-      items: [{ itemId: 'I-1', requiredQuantity: 3 }],
-    });
+    expect(registerOrUpdate).toHaveBeenCalledWith(
+      {
+        plateId: 'P-1',
+        name: 'Hamburguesa doble',
+        items: [{ itemId: 'I-1', requiredQuantity: 3 }],
+      },
+      { allowMissingItems: true },
+    );
   });
 
   it('menu.source.updated ignora payloads incompletos', async () => {

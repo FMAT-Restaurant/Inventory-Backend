@@ -115,6 +115,7 @@ export class OrdersEvents implements OnModuleInit {
       event.orderId,
       undefined,
       event.reason ?? 'Orden cancelada',
+      { eventId: event.eventId, correlationId: event.correlationId },
     );
     await this.markProcessed(event);
   }

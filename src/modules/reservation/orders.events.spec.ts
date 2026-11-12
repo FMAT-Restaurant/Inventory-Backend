@@ -242,6 +242,7 @@ describe('OrdersEvents', () => {
         'O-1',
         undefined,
         'Cliente desistió',
+        expect.objectContaining({ eventId: expect.any(String) }),
       );
       expect(harness.processedEvents.markProcessed).toHaveBeenCalledOnce();
     });
@@ -258,6 +259,7 @@ describe('OrdersEvents', () => {
         'O-1',
         undefined,
         'Orden cancelada',
+        expect.objectContaining({ eventId: expect.any(String) }),
       );
     });
 

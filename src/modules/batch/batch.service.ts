@@ -8,7 +8,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { isValidObjectId, Model } from 'mongoose';
+import { isValidObjectId, Model, Types } from 'mongoose';
 import { Batch, BatchStatus } from './schemas/batch.schema.js';
 import { CreateBatchDto } from './dto/create-batch.dto.js';
 import { UpdateBatchDto } from './dto/update-batch.dto.js';
@@ -21,6 +21,17 @@ import {
 import { StockMovementType } from '../stock-movement/schemas/stock-movement.schema.js';
 
 const DUPLICATE_KEY_ERROR_CODE = 11000;
+
+export interface SupplierCostEntry {
+  batchId: string;
+  batchNumber: string;
+  itemId: string;
+  itemName: string;
+  unit: string;
+  quantity: number;
+  cost: number;
+  purchasedAt: Date;
+}
 
 @Injectable()
 export class BatchService implements OnModuleInit {
@@ -58,6 +69,7 @@ export class BatchService implements OnModuleInit {
       ...createDto,
       batchNumber,
       initialQuantity: createDto.quantity,
+      purchaseCost: createDto.cost,
       status,
     });
 
@@ -143,6 +155,48 @@ export class BatchService implements OnModuleInit {
       'code' in error &&
       (error as { code: number }).code === DUPLICATE_KEY_ERROR_CODE
     );
+  }
+
+  /**
+   * Historial de costos de compra de un proveedor, del más antiguo al más
+   * reciente. Incluye proveedores dados de baja.
+   */
+  async getSupplierCostHistory(
+    supplierId: string,
+    itemId?: string,
+  ): Promise<SupplierCostEntry[]> {
+    await this.supplierService.findOne(supplierId);
+
+    // El esquema de lotes declara estas referencias con el tipo de BSON, así
+    // que se guardan como texto; se buscan ambos formatos por compatibilidad.
+    const filter: Record<string, unknown> = {
+      supplierId: { $in: [supplierId, new Types.ObjectId(supplierId)] },
+    };
+    if (itemId) {
+      filter.itemId = { $in: [itemId, new Types.ObjectId(itemId)] };
+    }
+
+    const batches = await this.batchModel
+      .find(filter)
+      .sort({ createdAt: 1, _id: 1 })
+      .exec();
+    const items = await this.itemService.findManyIncludingInactive(
+      batches.map((batch) => String(batch.itemId)),
+    );
+
+    return batches.map((batch) => {
+      const item = items.get(String(batch.itemId));
+      return {
+        batchId: String(batch._id),
+        batchNumber: batch.batchNumber,
+        itemId: String(batch.itemId),
+        itemName: item?.name ?? 'Insumo no disponible',
+        unit: item?.unit ?? '',
+        quantity: Number(batch.initialQuantity),
+        cost: Number(batch.purchaseCost ?? batch.cost),
+        purchasedAt: (batch as unknown as { createdAt: Date }).createdAt,
+      };
+    });
   }
 
   async findAll(itemId?: string): Promise<Batch[]> {

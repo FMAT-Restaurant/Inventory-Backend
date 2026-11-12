@@ -67,7 +67,9 @@ export class RecipeEvents implements OnModuleInit {
     }
 
     try {
-      const { recipe, isNew } = await this.recipeService.registerOrUpdate(dto);
+      const { recipe, isNew } = await this.recipeService.registerOrUpdate(dto, {
+        allowMissingItems: true,
+      });
       this.logger.log(
         `🍽️ Receta ${isNew ? 'registrada' : 'actualizada'} para plateId '${recipe.plateId}' desde '${MenuRoutingKeys.PlateCreated}'`,
       );
@@ -96,7 +98,9 @@ export class RecipeEvents implements OnModuleInit {
     }
 
     try {
-      const { isNew } = await this.recipeService.registerOrUpdate(dto);
+      const { isNew } = await this.recipeService.registerOrUpdate(dto, {
+        allowMissingItems: true,
+      });
       this.logger.log(
         `✏️ Receta '${dto.plateId}' ${isNew ? 'no existía y se creó' : 'actualizada'} desde '${MenuRoutingKeys.PlateUpdated}'`,
       );

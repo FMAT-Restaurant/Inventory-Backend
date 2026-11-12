@@ -129,6 +129,8 @@ MongoDB
 | `/reservations`   | Listar reservas por estado, orden o item.                                   |
 | `/reservations/:orderId` | Consultar la reserva de una orden.                                   |
 | `/reservations/pending/summary` | Resumir cantidades pendientes por item.                          |
+| `/movements/waste` | Registrar merma de una orden servida (no modifica stock).            |
+| `/suppliers/:id/cost-history` | Historial de costos de compra del proveedor.                 |
 
 El contrato detallado de cada endpoint se mantiene en `openapi.yml` y en los DTOs de cada módulo.
 
@@ -205,7 +207,8 @@ El contrato detallado de cada endpoint se mantiene en `openapi.yml` y en los DTO
 | Eventos consumidos     | `ordenes.order.created`, `ordenes.order.confirmed`, `ordenes.order.cancelled`, `ordenes.order.served`.   |
 | Cola de Inventario     | `cola_orders_events` (durable).                                                                          |
 | Exchange publicado     | `inventory.topic`.                                                                                       |
-| Resultados publicados  | `inventory.reservation.confirmed`, `.rejected`, `.released`, `.expired`.                                 |
+| Resultados publicados  | `inventory.reservation.confirmed`, `.rejected`, `.released`, `.expired`, `.consumed`. Los rechazos incluyen `errorCode` (`RECIPE_NOT_FOUND`, `RECIPE_INCOMPLETE`, `INSUFFICIENT_STOCK`, `ALREADY_SERVED`...). |
+| Alertas de recetas     | `inventory.recipe.not-available` (solo en la transición disponible → no disponible) e `inventory.recipe.incomplete`. |
 | Idempotencia           | Persistente por `consumer + eventId`; reservas idempotentes por `orderId`.                               |
 | Orden de procesamiento | Se tolera reentrega; `served` se registra pero el consumo FEFO queda para Fase 2.                        |
 

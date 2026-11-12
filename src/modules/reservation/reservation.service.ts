@@ -53,7 +53,27 @@ interface AggregatedItem {
 interface AggregatedItems {
   valid: AggregatedItem[];
   invalid: OrderEventItem[];
+  /** plateIds sin receta registrada en Inventario. */
+  missingRecipes: string[];
+  /** plateIds cuya receta está incompleta (insumos inexistentes). */
+  incompleteRecipes: string[];
 }
+
+type PlateExpansion =
+  | 'INVALID'
+  | 'NOT_FOUND'
+  | 'INCOMPLETE'
+  | Array<{ itemId: string; totalQty: number }>;
+
+export const ReservationErrorCodes = {
+  RecipeNotFound: 'RECIPE_NOT_FOUND',
+  RecipeIncomplete: 'RECIPE_INCOMPLETE',
+  InvalidItems: 'INVALID_ITEMS',
+  InsufficientStock: 'INSUFFICIENT_STOCK',
+  ReservationNotFound: 'RESERVATION_NOT_FOUND',
+  ReservationNotActive: 'RESERVATION_NOT_ACTIVE',
+  AlreadyServed: 'ALREADY_SERVED',
+} as const;
 
 export function resolveReservationTtlMinutes(): number {
   const configured = Number(process.env.RESERVATION_TTL_MINUTES);
@@ -190,9 +210,44 @@ export class ReservationService implements OnModuleInit {
     input: ReserveReservationInput,
     orderId: string,
   ): Promise<AggregatedItem[] | null> {
-    const { valid: items, invalid } = await this.resolveLinesToItems(
-      (input.items as any[]) ?? [],
-    );
+    const {
+      valid: items,
+      invalid,
+      missingRecipes,
+      incompleteRecipes,
+    } = await this.resolveLinesToItems((input.items as any[]) ?? []);
+
+    // Un platillo sin receta o con receta incompleta se reporta con un error
+    // propio, distinto del de stock insuficiente o items inválidos.
+    if (missingRecipes.length > 0) {
+      await this.publishRejected(
+        orderId,
+        missingRecipes.map((plateId) => ({
+          itemId: plateId,
+          requestedQuantity: 0,
+        })),
+        `Receta no encontrada para: ${missingRecipes.join(', ')}`,
+        input.eventId,
+        input.correlationId,
+        ReservationErrorCodes.RecipeNotFound,
+      );
+      return null;
+    }
+
+    if (incompleteRecipes.length > 0) {
+      await this.publishRejected(
+        orderId,
+        incompleteRecipes.map((plateId) => ({
+          itemId: plateId,
+          requestedQuantity: 0,
+        })),
+        `Receta incompleta (insumos inexistentes) para: ${incompleteRecipes.join(', ')}`,
+        input.eventId,
+        input.correlationId,
+        ReservationErrorCodes.RecipeIncomplete,
+      );
+      return null;
+    }
 
     if (invalid.length > 0) {
       await this.publishRejected(
@@ -202,6 +257,9 @@ export class ReservationService implements OnModuleInit {
           requestedQuantity: Number(item?.quantity ?? 0),
         })),
         'La orden contiene items inválidos',
+        input.eventId,
+        input.correlationId,
+        ReservationErrorCodes.InvalidItems,
       );
       return null;
     }
@@ -274,6 +332,9 @@ export class ReservationService implements OnModuleInit {
         availableStock: availableStockOf(itemDocs.get(item.itemId) as Item),
       })),
       'Stock insuficiente para cubrir la reserva',
+      undefined,
+      undefined,
+      ReservationErrorCodes.InsufficientStock,
     );
     return false;
   }
@@ -435,6 +496,7 @@ export class ReservationService implements OnModuleInit {
     status: ReservationStatus.RELEASED | ReservationStatus.EXPIRED =
       ReservationStatus.RELEASED,
     reason?: string,
+    context: { eventId?: string; correlationId?: string } = {},
   ): Promise<StockReservation | null> {
     const reservation = await this.reservationModel
       .findOne({ orderId })
@@ -452,9 +514,22 @@ export class ReservationService implements OnModuleInit {
     }
 
     if (reservation.status === ReservationStatus.CONSUMED) {
+      // Punto de no retorno: una orden servida ya descontó el stock. La
+      // cancelación se rechaza y cualquier reingreso debe registrarse como
+      // merma.
       this.logger.warn(
-        `⚠️ No se libera la reserva '${orderId}': ya fue consumida.`,
+        `⚠️ No se libera la reserva '${orderId}': la orden ya fue servida.`,
       );
+      if (status === ReservationStatus.RELEASED) {
+        await this.publishRejected(
+          orderId,
+          [],
+          'La orden ya fue servida: no se puede cancelar. Registra el reingreso como merma.',
+          context.eventId,
+          context.correlationId,
+          ReservationErrorCodes.AlreadyServed,
+        );
+      }
       return reservation;
     }
 
@@ -631,11 +706,13 @@ export class ReservationService implements OnModuleInit {
     lines: Array<{ plateId?: string; itemId?: string; quantity?: number }>,
   ): Promise<AggregatedItems> {
     if (!Array.isArray(lines)) {
-      return { valid: [], invalid: [] };
+      return { valid: [], invalid: [], missingRecipes: [], incompleteRecipes: [] };
     }
 
     const aggregated = new Map<string, number>();
     const invalid: any[] = [];
+    const missingRecipes = new Set<string>();
+    const incompleteRecipes = new Set<string>();
 
     for (const line of lines) {
       const quantity = this.normalizeLineQuantity(line?.quantity);
@@ -646,7 +723,15 @@ export class ReservationService implements OnModuleInit {
 
       const plateId = this.getNonEmptyString(line?.plateId);
       if (plateId) {
-        const expanded = await this.expandPlateIdToItems(plateId, quantity, line);
+        const expanded = await this.expandPlateIdToItems(plateId, quantity);
+        if (expanded === 'NOT_FOUND') {
+          missingRecipes.add(plateId);
+          continue;
+        }
+        if (expanded === 'INCOMPLETE') {
+          incompleteRecipes.add(plateId);
+          continue;
+        }
         if (expanded === 'INVALID') {
           invalid.push(line);
           continue;
@@ -682,6 +767,8 @@ export class ReservationService implements OnModuleInit {
         quantity,
       })),
       invalid,
+      missingRecipes: Array.from(missingRecipes),
+      incompleteRecipes: Array.from(incompleteRecipes),
     };
   }
 
@@ -704,14 +791,19 @@ export class ReservationService implements OnModuleInit {
   private async expandPlateIdToItems(
     plateId: string,
     quantity: number,
-    originalLine: unknown,
-  ): Promise<'INVALID' | Array<{ itemId: string; totalQty: number }>> {
+  ): Promise<PlateExpansion> {
     try {
       const recipe = await this.recipeModel
         .findOne({ plateId })
         .exec();
 
-      if (!recipe || !recipe.items || recipe.items.length === 0) {
+      if (!recipe) {
+        return 'NOT_FOUND';
+      }
+      if (recipe.isComplete === false) {
+        return 'INCOMPLETE';
+      }
+      if (!recipe.items || recipe.items.length === 0) {
         return 'INVALID';
       }
 
@@ -736,48 +828,6 @@ export class ReservationService implements OnModuleInit {
       );
       return 'INVALID';
     }
-  }
-
-  private aggregateItems(items: OrderEventItem[]): AggregatedItems {
-    if (!Array.isArray(items)) {
-      return { valid: [], invalid: [] };
-    }
-
-    const aggregated = new Map<string, number>();
-    const invalid: OrderEventItem[] = [];
-    for (const item of items) {
-      // Soportar plateId primero (preferido). También mantener itemId comentado/soportado.
-      if (item?.plateId && typeof item.plateId === 'string' && item.plateId.trim().length > 0) {
-        // No podemos resolver aquí sin async; este método síncrono se mantiene por compatibilidad
-        // El flujo nuevo usará resolveLinesToItems
-        invalid.push(item);
-        continue;
-      }
-      if (
-        !(item as any)?.itemId ||
-        !isValidObjectId((item as any).itemId) ||
-        !Number.isFinite(Number(item.quantity)) ||
-        Number(item.quantity) <= 0
-      ) {
-        invalid.push(item);
-        continue;
-      }
-
-      aggregated.set(
-        (item as any).itemId,
-        roundQuantity(
-          (aggregated.get((item as any).itemId) ?? 0) + Number(item.quantity),
-        ),
-      );
-    }
-
-    return {
-      valid: Array.from(aggregated.entries()).map(([itemId, quantity]) => ({
-        itemId,
-        quantity,
-      })),
-      invalid,
-    };
   }
 
   private async rollbackReserved(items: AggregatedItem[]): Promise<void> {
@@ -853,6 +903,7 @@ export class ReservationService implements OnModuleInit {
     reason: string,
     eventId?: string,
     correlationId?: string,
+    errorCode?: string,
   ): Promise<void> {
     await this.publishResult(InventoryRoutingKeys.ReservationRejected, {
       orderId,
@@ -860,11 +911,24 @@ export class ReservationService implements OnModuleInit {
       eventId,
       correlationId,
       reason,
+      ...(errorCode ? { errorCode } : {}),
       items,
       timestamp: new Date().toISOString(),
     });
   }
 
+  /**
+   * Descuento definitivo al servir una orden (punto de no retorno).
+   *
+   * Solo se consume una reserva activa (pendiente vigente o confirmada) y
+   * siempre con las cantidades que se reservaron, no con las del evento:
+   * - sin reserva, o con la reserva liberada o expirada, se rechaza sin
+   *   tocar el stock;
+   * - una orden ya consumida no se vuelve a consumir, aunque llegue otro
+   *   evento con distinto eventId.
+   * La transición a `consumed` es atómica, así que dos eventos simultáneos
+   * no pueden descontar dos veces.
+   */
   async consumeServedOrder(input: {
     orderId: string;
     eventId: string;
@@ -872,96 +936,94 @@ export class ReservationService implements OnModuleInit {
     items?: Array<{ plateId?: string; itemId?: string; quantity?: number }>;
     reason?: string;
   }): Promise<StockReservation | null> {
-    const orderId = this.normalizeOrderIdForConsume(input.orderId);
+    const orderId = input.orderId?.trim();
     if (!orderId) {
       return null;
     }
 
-    let reservation = await this.loadReservationForConsume(orderId);
-    if (reservation?.status === ReservationStatus.CONSUMED) {
-      return reservation;
-    }
-
-    const linesInput = this.getLinesInputForConsume(reservation, input.items);
-    const { valid: itemsToConsume, invalid } = await this.resolveLinesToItems(
-      linesInput,
-    );
-
-    if (this.shouldAbortConsumeDueToInvalid(reservation, invalid)) {
-      this.logger.warn(
-        `No se pudo consumir orden servida '${orderId}': líneas inválidas`,
-      );
-      return reservation ?? null;
-    }
-
-    if (itemsToConsume.length === 0) {
-      this.logger.warn(
-        `No se pudo consumir orden servida '${orderId}': sin items a consumir`,
-      );
-      return reservation ?? null;
-    }
-
-    await this.consumeItemsByFefo(itemsToConsume, orderId);
-
-    reservation = await this.transitionReservationToConsumedIfNeeded(
-      reservation,
-      orderId,
-      input.reason,
-    );
-
-    await this.publishConsumedEvent(orderId, itemsToConsume, input);
-
-    return reservation;
-  }
-
-  private normalizeOrderIdForConsume(orderId?: string): string | null {
-    const trimmed = orderId?.trim();
-    return trimmed && trimmed.length > 0 ? trimmed : null;
-  }
-
-  private async loadReservationForConsume(
-    orderId: string,
-  ): Promise<StockReservation | null> {
-    const reservation = await this.reservationModel
+    let reservation: StockReservation | null = await this.reservationModel
       .findOne({ orderId })
       .exec();
-    if (reservation?.status === ReservationStatus.CONSUMED) {
+    if (!reservation) {
+      await this.publishRejected(
+        orderId,
+        [],
+        'No existe una reserva para la orden servida: no se descuenta stock',
+        input.eventId,
+        input.correlationId,
+        ReservationErrorCodes.ReservationNotFound,
+      );
+      return null;
+    }
+
+    if (reservation.status === ReservationStatus.CONSUMED) {
+      this.logger.log(
+        `🔁 La orden '${orderId}' ya fue servida y consumida; se ignora.`,
+      );
       return reservation;
     }
-    return reservation ?? null;
-  }
 
-  private getLinesInputForConsume(
-    reservation: StockReservation | null,
-    itemsFromEvent?: Array<{
-      plateId?: string;
-      itemId?: string;
-      quantity?: number;
-    }>,
-  ): Array<{ plateId?: string; itemId?: string; quantity?: number }> {
-    if (itemsFromEvent && itemsFromEvent.length > 0) {
-      return itemsFromEvent;
+    // Una reserva pendiente vencida se expira (devuelve su stock) y ya no
+    // puede consumirse.
+    if (
+      reservation.status === ReservationStatus.PENDING &&
+      reservation.expiresAt &&
+      reservation.expiresAt.getTime() <= Date.now()
+    ) {
+      reservation =
+        (await this.release(
+          orderId,
+          ReservationStatus.EXPIRED,
+          'Reserva expirada por TTL',
+        )) ?? reservation;
     }
-    if (reservation?.items && reservation.items.length > 0) {
-      return reservation.items.map((i) => ({
-        itemId: i.itemId.toString(),
-        quantity: Number(i.quantity),
-      }));
-    }
-    return [];
-  }
 
-  private shouldAbortConsumeDueToInvalid(
-    reservation: StockReservation | null,
-    invalid: any[],
-  ): boolean {
-    if (invalid.length === 0) {
-      return false;
+    const claimed = await this.reservationModel
+      .findOneAndUpdate(
+        {
+          orderId,
+          status: {
+            $in: [ReservationStatus.PENDING, ReservationStatus.CONFIRMED],
+          },
+        },
+        {
+          status: ReservationStatus.CONSUMED,
+          expiresAt: null,
+          reason: input.reason ?? reservation.reason ?? null,
+        },
+        { new: true },
+      )
+      .exec();
+
+    if (!claimed) {
+      const current = await this.reservationModel.findOne({ orderId }).exec();
+      if (current?.status === ReservationStatus.CONSUMED) {
+        return current;
+      }
+      await this.publishRejected(
+        orderId,
+        [],
+        `La reserva está en estado '${current?.status ?? reservation.status}' y no puede consumirse`,
+        input.eventId,
+        input.correlationId,
+        ReservationErrorCodes.ReservationNotActive,
+      );
+      return current ?? reservation;
     }
-    if (!reservation || reservation.items.length === 0) {
-      return true;
-    }
-    return false;
+
+    const itemsToConsume: AggregatedItem[] = claimed.items.map((item) => ({
+      itemId: item.itemId.toString(),
+      quantity: Number(item.quantity),
+    }));
+
+    await this.releaseReservedItems(claimed);
+    await this.consumeItemsByFefo(itemsToConsume, orderId);
+
+    this.cache.invalidateOrder(orderId);
+    this.cache.setOrder(orderId, claimed, null);
+
+    await this.publishConsumedEvent(orderId, itemsToConsume, input);
+    return claimed;
   }
 
   private async consumeItemsByFefo(
@@ -983,52 +1045,6 @@ export class ReservationService implements OnModuleInit {
         );
       }
     }
-  }
-
-  private async transitionReservationToConsumedIfNeeded(
-    reservation: StockReservation | null,
-    orderId: string,
-    reason?: string,
-  ): Promise<StockReservation | null> {
-    if (!reservation) {
-      return null;
-    }
-
-    if (
-      reservation.status === ReservationStatus.PENDING &&
-      reservation.expiresAt &&
-      reservation.expiresAt.getTime() <= Date.now()
-    ) {
-      await this.release(
-        orderId,
-        ReservationStatus.EXPIRED,
-        'Reserva expirada por TTL',
-      );
-      reservation = await this.reservationModel.findOne({ orderId }).exec();
-    }
-
-    if (!reservation || reservation.status === ReservationStatus.CONSUMED) {
-      return reservation ?? null;
-    }
-
-    await this.releaseReservedItems(reservation);
-    const updated = await this.reservationModel
-      .findOneAndUpdate(
-        { orderId },
-        {
-          status: ReservationStatus.CONSUMED,
-          reason: reason ?? reservation.reason ?? null,
-        },
-        { new: true },
-      )
-      .exec();
-
-    reservation = updated;
-    this.cache.invalidateOrder(orderId);
-    if (reservation) {
-      this.cache.setOrder(orderId, reservation, null);
-    }
-    return reservation ?? null;
   }
 
   private async publishConsumedEvent(

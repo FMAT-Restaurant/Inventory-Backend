@@ -34,6 +34,7 @@ export const OrdersRoutingKeys = {
 export const InventoryRoutingKeys = {
   RecipeAvailabilityChanged: 'inventory.recipe.availability-changed',
   RecipeNotAvailable: 'inventory.recipe.not-available',
+  RecipeIncomplete: 'inventory.recipe.incomplete',
   ReservationConfirmed: 'inventory.reservation.confirmed',
   ReservationRejected: 'inventory.reservation.rejected',
   ReservationReleased: 'inventory.reservation.released',
@@ -78,6 +79,14 @@ export interface RecipeNotAvailableIngredient {
   availableStock: number;
 }
 
+// Alerta: receta registrada por evento con insumos inexistentes en el catálogo
+export interface RecipeIncompleteEvent {
+  plateId: string;
+  name: string;
+  missingItemIds: string[];
+  timestamp: string;
+}
+
 export interface RecipeNotAvailableEvent {
   plateId: string;
   name: string;
@@ -120,6 +129,11 @@ export interface ReservationResultEvent {
   eventId?: string;
   correlationId?: string;
   reason?: string;
+  /**
+   * Código estable del motivo de rechazo (p. ej. RECIPE_NOT_FOUND,
+   * INSUFFICIENT_STOCK, ALREADY_SERVED). Opcional y aditivo.
+   */
+  errorCode?: string;
   items?: ReservationResultItem[];
   timestamp: string;
 }
