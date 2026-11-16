@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ORDERS_EVENTS_QUEUE,
-  ORDERS_EXCHANGE,
+  ORDERS_EXCHANGES,
+  OrdersRoutingKeyAliases,
   OrdersRoutingKeys,
 } from '../../broker/event-conventions.js';
 import { EventSubscriptions } from '../../broker/event-subscriptions.js';
@@ -22,6 +23,12 @@ interface Harness {
   processedEvents: {
     isProcessed: ReturnType<typeof vi.fn>;
     markProcessed: ReturnType<typeof vi.fn>;
+    claim: ReturnType<typeof vi.fn>;
+    release: ReturnType<typeof vi.fn>;
+  };
+  wasteService: {
+    registerOrderWaste: ReturnType<typeof vi.fn>;
+    handleDishRejected: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -38,6 +45,13 @@ function buildHarness(): Harness {
   const processedEvents = {
     isProcessed: vi.fn().mockResolvedValue(false),
     markProcessed: vi.fn().mockResolvedValue(undefined),
+    claim: vi.fn().mockResolvedValue(true),
+    release: vi.fn().mockResolvedValue(undefined),
+  };
+
+  const wasteService = {
+    registerOrderWaste: vi.fn().mockResolvedValue({ recorded: 1, skipped: 0 }),
+    handleDishRejected: vi.fn().mockResolvedValue(undefined),
   };
 
   const events = new OrdersEvents(
@@ -45,9 +59,10 @@ function buildHarness(): Harness {
     reservationService as never,
     processedEvents as never,
     {} as never,
+    wasteService as never,
   );
 
-  return { events, consumer, reservationService, processedEvents };
+  return { events, consumer, reservationService, processedEvents, wasteService };
 }
 
 async function getSubscriptions(harness: Harness): Promise<EventSubscriptions> {
@@ -61,7 +76,7 @@ async function handlerFor(
 ): Promise<(payload: unknown) => Promise<void>> {
   const subscriptions = await getSubscriptions(harness);
   const matched = subscriptions.matching(routingKey);
-  expect(matched).toHaveLength(1);
+  expect(matched).toHaveLength(ORDERS_EXCHANGES.length);
   return matched[0].handler as (payload: unknown) => Promise<void>;
 }
 
@@ -84,7 +99,7 @@ describe('OrdersEvents', () => {
   });
 
   describe('onModuleInit', () => {
-    it('suscribe las cuatro routing keys de órdenes a la cola dedicada', async () => {
+    it('suscribe las claves de órdenes, en inglés y en español, a la cola dedicada', async () => {
       const subscriptions = await getSubscriptions(harness);
 
       expect(harness.consumer.consumeSubscriptions).toHaveBeenCalledWith(
@@ -93,10 +108,19 @@ describe('OrdersEvents', () => {
         { durable: true },
       );
 
-      for (const routingKey of Object.values(OrdersRoutingKeys)) {
-        const matched = subscriptions.matching(routingKey);
-        expect(matched).toHaveLength(1);
-        expect(matched[0].exchange).toBe(ORDERS_EXCHANGE);
+      const names = Object.keys(OrdersRoutingKeys) as Array<
+        keyof typeof OrdersRoutingKeys
+      >;
+      for (const name of names) {
+        for (const routingKey of [
+          OrdersRoutingKeys[name],
+          ...OrdersRoutingKeyAliases[name],
+        ]) {
+          const matched = subscriptions.matching(routingKey);
+          expect(matched.map((m) => m.exchange).sort()).toEqual(
+            [...ORDERS_EXCHANGES].sort(),
+          );
+        }
       }
     });
 
@@ -351,6 +375,165 @@ describe('OrdersEvents', () => {
         'E-1',
         'C-1',
       );
+    });
+  });
+
+  describe('claves en español y platillos con sourceId', () => {
+    it('procesa la orden creada con la clave en español y lee sourceId/offerId', async () => {
+      const handler = await handlerFor(
+        harness,
+        OrdersRoutingKeyAliases.OrderCreated[0],
+      );
+
+      await handler(
+        event('creada', {
+          items: [
+            { offerId: 'offer-1', sourceId: 'plate-1', quantity: 2 },
+            { offerId: 'offer-2', plateId: 'plate-2', quantity: 1 },
+          ],
+        }),
+      );
+
+      expect(harness.reservationService.reserve).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orderId: 'O-1',
+          items: [
+            { plateId: 'plate-1', offerId: 'offer-1', quantity: 2 },
+            { plateId: 'plate-2', offerId: 'offer-2', quantity: 1 },
+          ],
+        }),
+      );
+    });
+
+    it('la clave en_preparacion descuenta el stock igual que order.served', async () => {
+      const handler = await handlerFor(
+        harness,
+        OrdersRoutingKeyAliases.OrderServed[0],
+      );
+
+      await handler(event('en_preparacion', { items: [] }));
+
+      expect(harness.reservationService.consumeServedOrder).toHaveBeenCalled();
+    });
+  });
+
+  describe('order.expired', () => {
+    it('libera la reserva huérfana de la orden expirada', async () => {
+      const handler = await handlerFor(harness, OrdersRoutingKeys.OrderExpired);
+
+      await handler(event('expired', { reason: 'timeout' }));
+
+      expect(harness.reservationService.release).toHaveBeenCalledWith(
+        'O-1',
+        undefined,
+        'timeout',
+        expect.any(Object),
+      );
+      expect(harness.processedEvents.markProcessed).toHaveBeenCalled();
+    });
+  });
+
+  describe('order.wasted', () => {
+    it('registra la merma con los platillos afectados y el motivo', async () => {
+      const handler = await handlerFor(harness, OrdersRoutingKeys.OrderWasted);
+
+      await handler(
+        event('wasted', {
+          motivo: 'Comanda anulada por el chef',
+          itemsAfectados: [
+            { offerId: 'offer-1', quantity: 2 },
+            { offerId: 'offer-2', sourceId: 'plate-2', quantity: 1 },
+          ],
+        }),
+      );
+
+      expect(harness.processedEvents.claim).toHaveBeenCalledWith(
+        'orders-events',
+        'E-wasted',
+      );
+      expect(harness.wasteService.registerOrderWaste).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orderId: 'O-1',
+          reason: 'Comanda anulada por el chef',
+          lines: [
+            { offerId: 'offer-1', plateId: undefined, quantity: 2 },
+            { offerId: 'offer-2', plateId: 'plate-2', quantity: 1 },
+          ],
+        }),
+      );
+    });
+
+    it('libera el evento para reintentarlo si el registro falla', async () => {
+      harness.wasteService.registerOrderWaste.mockRejectedValueOnce(
+        new Error('base caída'),
+      );
+      const handler = await handlerFor(harness, OrdersRoutingKeys.OrderWasted);
+
+      await expect(
+        handler(
+          event('wasted', { itemsAfectados: [{ offerId: 'o', quantity: 1 }] }),
+        ),
+      ).rejects.toThrow('base caída');
+      expect(harness.processedEvents.release).toHaveBeenCalledWith(
+        'orders-events',
+        'E-wasted',
+      );
+    });
+
+    it('ignora un evento sin platillos afectados', async () => {
+      const handler = await handlerFor(harness, OrdersRoutingKeys.OrderWasted);
+
+      await handler(event('wasted', { itemsAfectados: [] }));
+
+      expect(harness.wasteService.registerOrderWaste).not.toHaveBeenCalled();
+    });
+
+    it('no vuelve a registrar un evento ya reclamado por otra copia', async () => {
+      harness.processedEvents.claim.mockResolvedValue(false);
+      const handler = await handlerFor(
+        harness,
+        OrdersRoutingKeyAliases.OrderWasted[0],
+      );
+
+      await handler(
+        event('wasted', { itemsAfectados: [{ offerId: 'o', quantity: 1 }] }),
+      );
+
+      expect(harness.wasteService.registerOrderWaste).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('dish.rejected', () => {
+    it('entrega el platillo rechazado para liberar su reserva', async () => {
+      const handler = await handlerFor(harness, OrdersRoutingKeys.DishRejected);
+
+      await handler(
+        event('dish', {
+          itemId: 'line-1',
+          offerId: 'offer-1',
+          sourceId: 'plate-1',
+          quantity: 1,
+          reason: 'Carne en mal estado',
+        }),
+      );
+
+      expect(harness.wasteService.handleDishRejected).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orderId: 'O-1',
+          offerId: 'offer-1',
+          plateId: 'plate-1',
+          quantity: 1,
+          reason: 'Carne en mal estado',
+        }),
+      );
+    });
+
+    it('ignora un rechazo sin cantidad válida', async () => {
+      const handler = await handlerFor(harness, OrdersRoutingKeys.DishRejected);
+
+      await handler(event('dish', { offerId: 'o', quantity: 0 }));
+
+      expect(harness.wasteService.handleDishRejected).not.toHaveBeenCalled();
     });
   });
 });

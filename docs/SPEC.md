@@ -129,7 +129,7 @@ MongoDB
 | `/reservations`   | Listar reservas por estado, orden o item.                                   |
 | `/reservations/:orderId` | Consultar la reserva de una orden.                                   |
 | `/reservations/pending/summary` | Resumir cantidades pendientes por item.                          |
-| `/movements/waste` | Registrar merma de una orden servida (no modifica stock).            |
+| `/movements/waste` | Registrar una merma manual: lote, cantidad y motivo. Descuenta del lote. |
 | `/suppliers/:id/cost-history` | Historial de costos de compra del proveedor.                 |
 
 El contrato detallado de cada endpoint se mantiene en `openapi.yml` y en los DTOs de cada módulo.
@@ -203,16 +203,19 @@ El contrato detallado de cada endpoint se mantiene en `openapi.yml` y en los DTO
 
 | Aspecto                | Valor actual                                                                                             |
 | ---------------------- | -------------------------------------------------------------------------------------------------------- |
-| Exchange consumido     | `ordenes.topic` (provisional, por confirmar con Órdenes).                                                |
-| Eventos consumidos     | `ordenes.order.created`, `ordenes.order.confirmed`, `ordenes.order.cancelled`, `ordenes.order.served`.   |
+| Exchanges consumidos   | `ordenes.topic` y `restaurant.events` (contrato de integración v1.0.0). Configurables con `ORDERS_EXCHANGES`; el exchange de integración con `INTEGRATION_EXCHANGE`. |
+| Eventos consumidos     | Cada uno con su clave en inglés y en español: `ordenes.order.created` / `ordenes.orden.creada`, `confirmed` / `confirmada`, `cancelled` / `cancelada`, `served` / `ordenes.orden.en_preparacion` (descuento FEFO), `expired` / `expirada` (libera la reserva), `ordenes.order.wasted` / `ordenes.comanda.mermada` y `ordenes.dish.rejected` / `ordenes.platillo.rechazado_cocina`. |
+| Recetas                | `plateId` (Inventario) = `sourceId` (Menú). Los platillos pueden traer `offerId`, que se conserva en la reserva para relacionar las mermas.      |
 | Cola de Inventario     | `cola_orders_events` (durable).                                                                          |
 | Exchange publicado     | `inventory.topic`.                                                                                       |
 | Resultados publicados  | `inventory.reservation.confirmed`, `.rejected`, `.released`, `.expired`, `.consumed`. Los rechazos incluyen `errorCode` (`RECIPE_NOT_FOUND`, `RECIPE_INCOMPLETE`, `INSUFFICIENT_STOCK`, `ALREADY_SERVED`...). |
+| Respuestas para Órdenes | `inventory.stock.reserved` / `inventario.stock.reservado` (`reservations[{ingredientId, reservedQuantity}]`) e `inventory.stock.insufficient` / `inventario.stock.insuficiente` (`missingIngredients`, `rejectedItems[{offerId, itemName, requestedQuantity, availableQuantity}]`, `reservedItems`). Se publican en `inventory.topic` y en el exchange de integración. Solo las solicitudes de reserva rechazadas generan `insufficient`. |
+| Mermas por evento      | `order.wasted`: registra movimientos `waste` en los lotes que consumió la orden (receta × cantidad, sin pasar de lo consumido) y no vuelve a descontar stock. `dish.rejected`: con la orden reservada libera solo el stock reservado del platillo; si ya se consumió, registra la merma. |
 | Alertas de recetas     | `inventory.recipe.not-available` (solo en la transición disponible → no disponible) e `inventory.recipe.incomplete`. |
 | Idempotencia           | Persistente por `consumer + eventId`; reservas idempotentes por `orderId`.                               |
-| Orden de procesamiento | Se tolera reentrega; `served` se registra pero el consumo FEFO queda para Fase 2.                        |
+| Orden de procesamiento | Se tolera reentrega; Órdenes emite cada evento con dos claves, por lo que las operaciones son idempotentes.                             |
 
-Los nombres definitivos de exchanges, routing keys y payloads deben acordarse y versionarse con Órdenes antes de producción.
+Pendiente de confirmar con Órdenes: el exchange definitivo, que `order.wasted` incluya `plateId`, y si `dish.rejected` debe registrar merma o solo liberar la reserva.
 
 ### 8.4 Envelope de evento actual
 

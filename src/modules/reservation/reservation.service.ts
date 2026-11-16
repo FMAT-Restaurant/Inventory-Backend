@@ -9,8 +9,11 @@ import { isValidObjectId, Model, Types } from 'mongoose';
 import { ItemService } from '../item/item.service.js';
 import { Item } from '../item/schemas/item.schema.js';
 import { EventPublisher } from '../../broker/event-publisher.service.js';
+import { randomUUID } from 'node:crypto';
 import {
+  INTEGRATION_EXCHANGE,
   INVENTORY_EXCHANGE,
+  InventoryRoutingKeyAliases,
   InventoryRoutingKeys,
   OrderEventItem,
   ReservationResultEvent,
@@ -161,12 +164,17 @@ export class ReservationService implements OnModuleInit {
       return null;
     }
 
-    const itemDocs = await this.loadItemsOrReject(items, orderId);
+    const itemDocs = await this.loadItemsOrReject(items, orderId, input);
     if (!itemDocs) {
       return null;
     }
 
-    const ok = await this.ensureStockAvailable(items, itemDocs, orderId);
+    const ok = await this.ensureStockAvailable(
+      items,
+      itemDocs,
+      orderId,
+      input,
+    );
     if (!ok) {
       return null;
     }
@@ -230,6 +238,7 @@ export class ReservationService implements OnModuleInit {
         input.eventId,
         input.correlationId,
         ReservationErrorCodes.RecipeNotFound,
+        { lines: input.items, badPlateIds: missingRecipes },
       );
       return null;
     }
@@ -245,6 +254,7 @@ export class ReservationService implements OnModuleInit {
         input.eventId,
         input.correlationId,
         ReservationErrorCodes.RecipeIncomplete,
+        { lines: input.items, badPlateIds: incompleteRecipes },
       );
       return null;
     }
@@ -260,6 +270,7 @@ export class ReservationService implements OnModuleInit {
         input.eventId,
         input.correlationId,
         ReservationErrorCodes.InvalidItems,
+        { lines: input.items },
       );
       return null;
     }
@@ -269,6 +280,10 @@ export class ReservationService implements OnModuleInit {
         orderId,
         [],
         'La orden no contiene items válidos',
+        input.eventId,
+        input.correlationId,
+        ReservationErrorCodes.InvalidItems,
+        { lines: input.items },
       );
       return null;
     }
@@ -279,6 +294,7 @@ export class ReservationService implements OnModuleInit {
   private async loadItemsOrReject(
     items: AggregatedItem[],
     orderId: string,
+    input: ReserveReservationInput,
   ): Promise<Map<string, Item> | null> {
     const itemDocs = new Map<string, Item>();
 
@@ -301,6 +317,10 @@ export class ReservationService implements OnModuleInit {
             },
           ],
           `Item '${item.itemId}' no encontrado`,
+          input.eventId,
+          input.correlationId,
+          undefined,
+          { lines: input.items, shortItemIds: [item.itemId] },
         );
         return null;
       }
@@ -313,6 +333,7 @@ export class ReservationService implements OnModuleInit {
     items: AggregatedItem[],
     itemDocs: Map<string, Item>,
     orderId: string,
+    input: ReserveReservationInput,
   ): Promise<boolean> {
     const insufficient = items.filter(
       (item) =>
@@ -332,9 +353,13 @@ export class ReservationService implements OnModuleInit {
         availableStock: availableStockOf(itemDocs.get(item.itemId) as Item),
       })),
       'Stock insuficiente para cubrir la reserva',
-      undefined,
-      undefined,
+      input.eventId,
+      input.correlationId,
       ReservationErrorCodes.InsufficientStock,
+      {
+        lines: input.items,
+        shortItemIds: insufficient.map((item) => item.itemId),
+      },
     );
     return false;
   }
@@ -365,6 +390,7 @@ export class ReservationService implements OnModuleInit {
           itemId: new Types.ObjectId(item.itemId),
           quantity: item.quantity,
         })),
+        lines: this.buildLines(input.items),
         status: ReservationStatus.PENDING,
         expiresAt:
           ttlMinutes > 0
@@ -393,6 +419,10 @@ export class ReservationService implements OnModuleInit {
             },
           ],
           'Stock insuficiente para cubrir la reserva',
+          input.eventId,
+          input.correlationId,
+          ReservationErrorCodes.InsufficientStock,
+          { lines: input.items, shortItemIds: [error.itemId] },
         );
         return null;
       }
@@ -568,6 +598,116 @@ export class ReservationService implements OnModuleInit {
       this.buildResult(updated, reason),
     );
     return updated;
+  }
+
+  /**
+   * Cocina rechazó un platillo con la orden aún reservada: se devuelve solo
+   * el stock reservado de ese platillo y el resto de la orden sigue igual.
+   * Si ya no queda nada reservado, la reserva se da por liberada.
+   */
+  async releaseDish(input: {
+    orderId: string;
+    plateId?: string;
+    offerId?: string;
+    quantity: number;
+    reason?: string;
+  }): Promise<'released' | 'not-active' | 'unresolved'> {
+    const reservation = await this.reservationModel
+      .findOne({ orderId: input.orderId })
+      .exec();
+    if (
+      !reservation ||
+      !ACTIVE_RESERVATION_STATUSES.includes(
+        reservation.status as (typeof ACTIVE_RESERVATION_STATUSES)[number],
+      )
+    ) {
+      return 'not-active';
+    }
+
+    const plateId =
+      this.getNonEmptyString(input.plateId) ??
+      reservation.lines?.find((line) => line.offerId === input.offerId)
+        ?.plateId;
+    if (!plateId) {
+      return 'unresolved';
+    }
+
+    const expanded = await this.expandPlateIdToItems(plateId, input.quantity);
+    if (typeof expanded === 'string') {
+      return 'unresolved';
+    }
+
+    const toRelease = new Map(
+      expanded.map(({ itemId, totalQty }) => [itemId, totalQty]),
+    );
+    const released: AggregatedItem[] = [];
+    const items = reservation.items
+      .map((item) => {
+        const key = item.itemId.toString();
+        const wanted = toRelease.get(key) ?? 0;
+        const give = Math.min(wanted, Number(item.quantity));
+        if (give > 0) {
+          released.push({ itemId: key, quantity: give });
+        }
+        return {
+          itemId: item.itemId,
+          quantity: roundQuantity(Number(item.quantity) - give),
+        };
+      })
+      .filter((item) => item.quantity > 0);
+
+    let remainingToDrop = input.quantity;
+    const lines = (reservation.lines ?? [])
+      .map((line) => {
+        if (line.plateId !== plateId || remainingToDrop <= 0) {
+          return line;
+        }
+        const drop = Math.min(remainingToDrop, Number(line.quantity));
+        remainingToDrop -= drop;
+        return {
+          offerId: line.offerId ?? null,
+          plateId: line.plateId,
+          quantity: roundQuantity(Number(line.quantity) - drop),
+        };
+      })
+      .filter((line) => Number(line.quantity) > 0);
+
+    const emptied = items.length === 0;
+    const updated = await this.reservationModel
+      .findOneAndUpdate(
+        {
+          orderId: input.orderId,
+          status: { $in: [...ACTIVE_RESERVATION_STATUSES] },
+        },
+        {
+          items,
+          lines,
+          ...(emptied
+            ? {
+                status: ReservationStatus.RELEASED,
+                reason: input.reason ?? 'Platillo rechazado por cocina',
+              }
+            : {}),
+        },
+        { new: true },
+      )
+      .exec();
+    if (!updated) {
+      return 'not-active';
+    }
+
+    for (const item of released) {
+      try {
+        await this.itemService.adjustReservedStock(item.itemId, -item.quantity);
+      } catch (error) {
+        this.logger.error(
+          `❌ No se pudo liberar el stock reservado del item '${item.itemId}':`,
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
+    }
+    this.cache.invalidateOrder(input.orderId);
+    return 'released';
   }
 
   async expireDue(now = new Date()): Promise<number> {
@@ -888,12 +1028,123 @@ export class ReservationService implements OnModuleInit {
     };
   }
 
+  private buildLines(
+    items: OrderEventItem[] | undefined,
+  ): Array<{ offerId: string | null; plateId: string; quantity: number }> {
+    const lines: Array<{
+      offerId: string | null;
+      plateId: string;
+      quantity: number;
+    }> = [];
+    for (const item of items ?? []) {
+      const plateId = this.getNonEmptyString(item?.plateId);
+      const quantity = this.normalizeLineQuantity(item?.quantity);
+      if (!plateId || quantity === null) {
+        continue;
+      }
+      lines.push({
+        offerId: this.getNonEmptyString(item?.offerId) ?? null,
+        plateId,
+        quantity,
+      });
+    }
+    return lines;
+  }
+
+  /**
+   * Respuesta de reserva en el formato del contrato con Órdenes & KDS
+   * (`inventario.stock.reservado` / `inventario.stock.insuficiente`).
+   * Se publica en el exchange propio y en el de integración, con la clave
+   * en inglés y en español, para que la reciba quien escuche cualquiera.
+   */
+  private async publishIntegration(
+    names: [string, string],
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const exchanges = Array.from(
+      new Set([INVENTORY_EXCHANGE, INTEGRATION_EXCHANGE]),
+    );
+    for (const exchange of exchanges) {
+      for (const routingKey of names) {
+        try {
+          await this.publisher.publish(exchange, routingKey, payload);
+        } catch (error) {
+          this.logger.warn(
+            `No se pudo publicar '${routingKey}' en '${exchange}' para la orden '${String(payload.orderId)}': ${error}`,
+          );
+        }
+      }
+    }
+  }
+
+  private async rejectedLinesFor(
+    lines: OrderEventItem[],
+    shortItemIds: Set<string>,
+    badPlateIds: Set<string>,
+  ): Promise<{
+    rejected: Array<Record<string, unknown>>;
+    reserved: Array<Record<string, unknown>>;
+  }> {
+    const rejected: Array<Record<string, unknown>> = [];
+    const reserved: Array<Record<string, unknown>> = [];
+
+    for (const line of lines) {
+      const plateId = this.getNonEmptyString(line?.plateId);
+      const quantity = Number(line?.quantity ?? 0);
+      const offerId = this.getNonEmptyString(line?.offerId) ?? plateId;
+      if (!plateId) {
+        continue;
+      }
+
+      let blocked = badPlateIds.has(plateId);
+      let name: string | undefined;
+      try {
+        const recipe = await this.recipeModel.findOne({ plateId }).exec();
+        name = recipe?.name;
+        if (!blocked && shortItemIds.size > 0 && recipe) {
+          blocked = (recipe.items ?? []).some((recipeItem) =>
+            shortItemIds.has(String(recipeItem.itemId)),
+          );
+        }
+      } catch {
+        // sin nombre: se responde igual con el identificador
+      }
+
+      if (blocked) {
+        rejected.push({
+          offerId,
+          itemName: name ?? offerId,
+          requestedQuantity: quantity,
+          availableQuantity: 0,
+        });
+      } else {
+        reserved.push({ offerId, quantity });
+      }
+    }
+    return { rejected, reserved };
+  }
+
   private async publishConfirmed(
     reservation: StockReservation,
   ): Promise<void> {
     await this.publishResult(
       InventoryRoutingKeys.ReservationConfirmed,
       this.buildResult(reservation),
+    );
+    await this.publishIntegration(
+      [
+        InventoryRoutingKeys.StockReserved,
+        InventoryRoutingKeyAliases.StockReserved,
+      ],
+      {
+        eventId: randomUUID(),
+        orderId: reservation.orderId,
+        correlationId: reservation.correlationId ?? null,
+        reservations: reservation.items.map((item) => ({
+          ingredientId: item.itemId.toString(),
+          reservedQuantity: Number(item.quantity),
+        })),
+      },
     );
   }
 
@@ -904,6 +1155,11 @@ export class ReservationService implements OnModuleInit {
     eventId?: string,
     correlationId?: string,
     errorCode?: string,
+    context: {
+      lines?: OrderEventItem[];
+      shortItemIds?: string[];
+      badPlateIds?: string[];
+    } = {},
   ): Promise<void> {
     await this.publishResult(InventoryRoutingKeys.ReservationRejected, {
       orderId,
@@ -915,6 +1171,35 @@ export class ReservationService implements OnModuleInit {
       items,
       timestamp: new Date().toISOString(),
     });
+
+    // Solo los rechazos de una solicitud de reserva se informan a Órdenes
+    // como stock insuficiente; confirmar, cancelar o servir fuera de orden
+    // no deben marcar la orden como rechazada.
+    if (!context.lines) {
+      return;
+    }
+
+    const { rejected, reserved } = await this.rejectedLinesFor(
+      context.lines,
+      new Set(context.shortItemIds ?? []),
+      new Set(context.badPlateIds ?? []),
+    );
+    await this.publishIntegration(
+      [
+        InventoryRoutingKeys.StockInsufficient,
+        InventoryRoutingKeyAliases.StockInsufficient,
+      ],
+      {
+        eventId: randomUUID(),
+        orderId,
+        correlationId: correlationId ?? null,
+        reason,
+        ...(errorCode ? { errorCode } : {}),
+        missingIngredients: items.map((item) => item.itemName ?? item.itemId),
+        rejectedItems: rejected,
+        reservedItems: reserved,
+      },
+    );
   }
 
   /**

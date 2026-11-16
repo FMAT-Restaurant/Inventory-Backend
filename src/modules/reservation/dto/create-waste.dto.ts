@@ -15,19 +15,10 @@ import {
   Trim,
 } from '../../../common/validation.js';
 
+/** Merma manual: solo el lote, la cantidad perdida y el motivo. */
 export class CreateWasteDto {
   @ApiProperty({
-    description: 'Referencia de la orden servida a la que pertenece la merma',
-    example: 'ORD-1001',
-  })
-  @Trim()
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(100)
-  orderId: string;
-
-  @ApiProperty({
-    description: 'Lote consumido por la orden del que se registra la merma',
+    description: 'Lote en el que se generó la merma',
     example: '60d5ec9af682fbd39a1b865b',
   })
   @IsMongoId()
@@ -42,7 +33,7 @@ export class CreateWasteDto {
 
   @ApiProperty({
     description: 'Motivo de la merma',
-    example: 'Platillo devuelto por el cliente sin reingreso posible',
+    example: 'Se cayó durante el acomodo del almacén',
   })
   @Trim()
   @IsString()

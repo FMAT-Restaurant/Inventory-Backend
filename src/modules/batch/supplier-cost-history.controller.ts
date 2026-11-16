@@ -23,7 +23,7 @@ export class SupplierCostHistoryController {
   @ApiOperation({
     summary: 'Historial de costos de compra de un proveedor',
     description:
-      'Lista las compras (lotes) del proveedor en orden cronológico con su costo unitario de compra.',
+      'Lista las compras (lotes) del proveedor con su costo unitario de compra, la más reciente primero. Admite filtros por insumo y rango de fechas, orden y paginación.',
   })
   @ApiParam({ name: 'id', description: 'ID del proveedor (ObjectId)' })
   @ApiOkResponse({ description: 'Historial obtenido con éxito' })
@@ -32,6 +32,6 @@ export class SupplierCostHistoryController {
     @Param('id') id: string,
     @Query() query: QueryCostHistoryDto,
   ) {
-    return this.batchService.getSupplierCostHistory(id, query.itemId);
+    return this.batchService.getSupplierCostHistory(id, query);
   }
 }

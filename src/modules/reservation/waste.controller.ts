@@ -21,18 +21,17 @@ export class WasteController {
   @Post('waste')
   @RequiredPermissions(PERMISSIONS.BATCHES_WRITE)
   @ApiOperation({
-    summary: 'Registrar merma de una orden servida',
+    summary: 'Registrar una merma de un lote',
     description:
-      'Registra la pérdida de insumos ya descontados al servir la orden. No modifica el stock.',
+      'Descuenta del lote la cantidad perdida y registra el movimiento de merma. Solo requiere el lote, la cantidad y el motivo. Las mermas de órdenes llegan por evento desde Órdenes.',
   })
   @ApiCreatedResponse({ description: 'Merma registrada' })
   @ApiUnprocessableEntityResponse({
-    description:
-      'La orden no está servida, el lote no fue consumido por ella o la cantidad excede lo consumido',
+    description: 'La cantidad excede lo que queda en el lote',
   })
   create(@Body() dto: CreateWasteDto, @CurrentUser() user?: AuthUser) {
     // El responsable sale del usuario autenticado, no del cliente.
     const createdBy = user?.staffId ?? user?.userId ?? 'system';
-    return this.wasteService.register(dto, createdBy);
+    return this.wasteService.registerManual(dto, createdBy);
   }
 }
