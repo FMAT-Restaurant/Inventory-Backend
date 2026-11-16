@@ -6,9 +6,10 @@ import {
   Logger,
   NotFoundException,
   OnModuleInit,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { isValidObjectId, Model } from 'mongoose';
+import { isValidObjectId, Model, Types } from 'mongoose';
 import { Batch, BatchStatus } from './schemas/batch.schema.js';
 import { CreateBatchDto } from './dto/create-batch.dto.js';
 import { UpdateBatchDto } from './dto/update-batch.dto.js';
@@ -18,9 +19,45 @@ import {
   RecordStockMovementInput,
   StockMovementService,
 } from '../stock-movement/stock-movement.service.js';
-import { StockMovementType } from '../stock-movement/schemas/stock-movement.schema.js';
+import {
+  StockMovement,
+  StockMovementType,
+} from '../stock-movement/schemas/stock-movement.schema.js';
 
 const DUPLICATE_KEY_ERROR_CODE = 11000;
+
+export interface SupplierCostEntry {
+  batchId: string;
+  batchNumber: string;
+  itemId: string;
+  itemName: string;
+  unit: string;
+  quantity: number;
+  cost: number;
+  purchasedAt: Date;
+}
+
+export interface SupplierCostHistoryQuery {
+  itemId?: string;
+  from?: string;
+  to?: string;
+  order?: 'asc' | 'desc';
+  page?: number;
+  limit?: number;
+}
+
+export interface SupplierCostHistoryPage {
+  items: SupplierCostEntry[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+  filters: {
+    items: Array<{ itemId: string; itemName: string; unit: string }>;
+  };
+}
+
+const COST_HISTORY_MAX_LIMIT = 100;
 
 @Injectable()
 export class BatchService implements OnModuleInit {
@@ -58,6 +95,7 @@ export class BatchService implements OnModuleInit {
       ...createDto,
       batchNumber,
       initialQuantity: createDto.quantity,
+      purchaseCost: createDto.cost,
       status,
     });
 
@@ -143,6 +181,125 @@ export class BatchService implements OnModuleInit {
       'code' in error &&
       (error as { code: number }).code === DUPLICATE_KEY_ERROR_CODE
     );
+  }
+
+  /**
+   * Historial de costos de compra de un proveedor, paginado. Por defecto
+   * muestra primero la compra más reciente. Incluye proveedores dados de
+   * baja. `filters.items` lista los insumos que el proveedor ha surtido
+   * (sin aplicar el resto de filtros) para poblar un selector.
+   */
+  async getSupplierCostHistory(
+    supplierId: string,
+    query: SupplierCostHistoryQuery = {},
+  ): Promise<SupplierCostHistoryPage> {
+    await this.supplierService.findOne(supplierId);
+
+    const limit = Math.min(
+      Math.max(Math.trunc(query.limit ?? 20), 1),
+      COST_HISTORY_MAX_LIMIT,
+    );
+    const order = query.order === 'asc' ? 1 : -1;
+
+    // El esquema de lotes declara estas referencias con el tipo de BSON, así
+    // que se guardan como texto; se buscan ambos formatos por compatibilidad.
+    const baseFilter = {
+      supplierId: { $in: [supplierId, new Types.ObjectId(supplierId)] },
+    };
+    const filter: Record<string, unknown> = { ...baseFilter };
+    if (query.itemId) {
+      filter.itemId = { $in: [query.itemId, new Types.ObjectId(query.itemId)] };
+    }
+
+    const range = this.buildDateRange(query.from, query.to);
+    if (range) {
+      filter.createdAt = range;
+    }
+
+    const total = await this.batchModel.countDocuments(filter).exec();
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const page = Math.min(Math.max(Math.trunc(query.page ?? 1), 1), totalPages);
+
+    const [batches, itemIds] = await Promise.all([
+      this.batchModel
+        .find(filter)
+        .sort({ createdAt: order, _id: order })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .exec(),
+      this.batchModel.distinct('itemId', baseFilter).exec(),
+    ]);
+
+    const supplied = Array.from(new Set(itemIds.map((id) => String(id))));
+    const items = await this.itemService.findManyIncludingInactive([
+      ...supplied,
+      ...batches.map((batch) => String(batch.itemId)),
+    ]);
+
+    return {
+      items: batches.map((batch) => {
+        const item = items.get(String(batch.itemId));
+        return {
+          batchId: String(batch._id),
+          batchNumber: batch.batchNumber,
+          itemId: String(batch.itemId),
+          itemName: item?.name ?? 'Insumo no disponible',
+          unit: item?.unit ?? '',
+          quantity: Number(batch.initialQuantity),
+          cost: Number(batch.purchaseCost ?? batch.cost),
+          purchasedAt: (batch as unknown as { createdAt: Date }).createdAt,
+        };
+      }),
+      total,
+      page,
+      limit,
+      totalPages,
+      filters: {
+        items: supplied
+          .map((id) => ({
+            itemId: id,
+            itemName: items.get(id)?.name ?? 'Insumo no disponible',
+            unit: items.get(id)?.unit ?? '',
+          }))
+          .sort((a, b) => a.itemName.localeCompare(b.itemName, 'es')),
+      },
+    };
+  }
+
+  /**
+   * Rango de fechas de compra. Una fecha sin hora ("2026-11-30") incluye
+   * todo ese día (UTC); con hora se respeta tal cual.
+   */
+  private buildDateRange(
+    from?: string,
+    to?: string,
+  ): { $gte?: Date; $lt?: Date; $lte?: Date } | null {
+    const range: { $gte?: Date; $lt?: Date; $lte?: Date } = {};
+
+    if (from) {
+      range.$gte = new Date(from);
+    }
+    if (to) {
+      const end = new Date(to);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+        end.setUTCDate(end.getUTCDate() + 1);
+        range.$lt = end;
+      } else {
+        range.$lte = end;
+      }
+    }
+
+    if (
+      range.$gte &&
+      (range.$lt ?? range.$lte) &&
+      range.$gte.getTime() >= (range.$lt ?? range.$lte)!.getTime()
+    ) {
+      throw new BadRequestException(
+        'La fecha inicial debe ser anterior a la fecha final',
+      );
+    }
+
+    return Object.keys(range).length > 0 ? range : null;
   }
 
   async findAll(itemId?: string): Promise<Batch[]> {
@@ -318,13 +475,73 @@ export class BatchService implements OnModuleInit {
     );
   }
 
+  /**
+   * Merma manual: descuenta del lote la cantidad perdida y deja el
+   * movimiento `waste`. No exige una orden; solo el lote, la cantidad y el
+   * motivo. La resta es atómica, así que dos mermas simultáneas no pueden
+   * dejar el lote en negativo.
+   */
+  async registerWaste(
+    id: string,
+    quantity: number,
+    reason: string,
+    createdBy?: string,
+  ): Promise<{ batch: Batch; movement: StockMovement }> {
+    const current = await this.findOne(id);
+    const amount = Math.round(Number(quantity) * 1000) / 1000;
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException('La cantidad de la merma debe ser mayor a 0');
+    }
+    if (amount > Number(current.quantity)) {
+      throw new UnprocessableEntityException(
+        `La merma excede la cantidad del lote (disponible: ${current.quantity})`,
+      );
+    }
+
+    const updated = await this.batchModel
+      .findOneAndUpdate(
+        { _id: id, quantity: { $gte: amount } },
+        { $inc: { quantity: -amount } },
+        { new: true },
+      )
+      .exec();
+    if (!updated) {
+      const latest = await this.findOne(id);
+      throw new UnprocessableEntityException(
+        `La merma excede la cantidad del lote (disponible: ${latest.quantity})`,
+      );
+    }
+
+    updated.quantity = Math.round(Number(updated.quantity) * 1000) / 1000;
+    updated.status = this.computeStatus(
+      updated.quantity,
+      updated.expirationDate,
+    );
+    await updated.save();
+
+    const movement = await this.stockMovementService.record({
+      batchId: id,
+      movementType: StockMovementType.WASTE,
+      quantity: amount,
+      reason,
+      createdBy,
+    });
+
+    await this.syncItemStockAndCost(String(updated.itemId));
+    return { batch: updated, movement };
+  }
+
   async consumeByFefo(
     itemId: string,
     quantityToConsume: number,
     referenceId?: string,
     reason = 'Consumo por orden servida',
   ): Promise<void> {
-    if (!isValidObjectId(itemId) || !Number.isFinite(quantityToConsume) || quantityToConsume <= 0) {
+    if (
+      !isValidObjectId(itemId) ||
+      !Number.isFinite(quantityToConsume) ||
+      quantityToConsume <= 0
+    ) {
       return;
     }
 
@@ -342,7 +559,11 @@ export class BatchService implements OnModuleInit {
       if (status === BatchStatus.EXPIRED) {
         continue;
       }
-      if ((status !== BatchStatus.ACTIVE && status !== BatchStatus.EXPIRES_TODAY) || batch.quantity <= 0) {
+      if (
+        (status !== BatchStatus.ACTIVE &&
+          status !== BatchStatus.EXPIRES_TODAY) ||
+        batch.quantity <= 0
+      ) {
         continue;
       }
 

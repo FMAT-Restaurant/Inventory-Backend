@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NotFoundException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import {
+  INTEGRATION_EXCHANGE,
   INVENTORY_EXCHANGE,
+  InventoryRoutingKeyAliases,
   InventoryRoutingKeys,
 } from '../../broker/event-conventions.js';
 import { ReservationCacheService } from './reservation-cache.service.js';
@@ -851,7 +853,7 @@ describe('ReservationService', () => {
       expect(batchService.consumeByFefo).not.toHaveBeenCalled();
     });
 
-    it('consume los items del evento aunque no exista reserva', async () => {
+    it('rechaza una orden servida sin reserva y no descuenta stock', async () => {
       findOneExec.mockResolvedValue(null);
 
       await expect(
@@ -862,17 +864,81 @@ describe('ReservationService', () => {
         }),
       ).resolves.toBeNull();
 
+      expect(batchService.consumeByFefo).not.toHaveBeenCalled();
+      expect(publisher.publish).toHaveBeenCalledWith(
+        INVENTORY_EXCHANGE,
+        InventoryRoutingKeys.ReservationRejected,
+        expect.objectContaining({
+          orderId: 'O-1',
+          errorCode: 'RESERVATION_NOT_FOUND',
+        }),
+      );
+    });
+
+    it.each([ReservationStatus.RELEASED, ReservationStatus.EXPIRED])(
+      'rechaza servir una orden con la reserva %s sin liberar ni consumir de nuevo',
+      async (status) => {
+        const inactive = reservation({
+          status,
+          items: [{ itemId: new Types.ObjectId(ITEM_A), quantity: 2 }],
+        });
+        findOneExec.mockResolvedValue(inactive);
+        findOneAndUpdateExec.mockResolvedValue(null);
+
+        await service.consumeServedOrder({ orderId: 'O-1', eventId: 'E-1' });
+
+        expect(itemService.adjustReservedStock).not.toHaveBeenCalled();
+        expect(batchService.consumeByFefo).not.toHaveBeenCalled();
+        expect(publisher.publish).toHaveBeenCalledWith(
+          INVENTORY_EXCHANGE,
+          InventoryRoutingKeys.ReservationRejected,
+          expect.objectContaining({ errorCode: 'RESERVATION_NOT_ACTIVE' }),
+        );
+      },
+    );
+
+    it('usa las cantidades reservadas aunque el evento traiga otras', async () => {
+      const pending = reservation({
+        items: [{ itemId: new Types.ObjectId(ITEM_A), quantity: 2 }],
+      });
+      findOneExec.mockResolvedValue(pending);
+      findOneAndUpdateExec.mockResolvedValue({
+        ...pending,
+        status: ReservationStatus.CONSUMED,
+      });
+
+      await service.consumeServedOrder({
+        orderId: 'O-1',
+        eventId: 'E-1',
+        items: [{ itemId: ITEM_B, quantity: 50 }],
+      });
+
+      expect(batchService.consumeByFefo).toHaveBeenCalledTimes(1);
       expect(batchService.consumeByFefo).toHaveBeenCalledWith(
         ITEM_A,
         2,
         'O-1',
         'Consumo por orden servida',
       );
-      expect(publisher.publish).toHaveBeenCalledWith(
-        INVENTORY_EXCHANGE,
-        InventoryRoutingKeys.ReservationConsumed,
-        expect.objectContaining({ orderId: 'O-1' }),
-      );
+    });
+
+    it('no consume dos veces si otro evento ya la consumió en paralelo', async () => {
+      const pending = reservation({
+        items: [{ itemId: new Types.ObjectId(ITEM_A), quantity: 2 }],
+      });
+      findOneExec
+        .mockResolvedValueOnce(pending)
+        .mockResolvedValueOnce({ ...pending, status: ReservationStatus.CONSUMED });
+      findOneAndUpdateExec.mockResolvedValue(null);
+
+      const result = await service.consumeServedOrder({
+        orderId: 'O-1',
+        eventId: 'E-2',
+      });
+
+      expect(result?.status).toBe(ReservationStatus.CONSUMED);
+      expect(batchService.consumeByFefo).not.toHaveBeenCalled();
+      expect(itemService.adjustReservedStock).not.toHaveBeenCalled();
     });
 
     it('consume la reserva persistida y la marca como consumida', async () => {
@@ -908,7 +974,14 @@ describe('ReservationService', () => {
     });
 
     it('tolera que falle la publicación del evento de consumo', async () => {
-      findOneExec.mockResolvedValue(null);
+      const pending = reservation({
+        items: [{ itemId: new Types.ObjectId(ITEM_A), quantity: 1 }],
+      });
+      findOneExec.mockResolvedValue(pending);
+      findOneAndUpdateExec.mockResolvedValue({
+        ...pending,
+        status: ReservationStatus.CONSUMED,
+      });
       const publishResultSpy = vi
         .spyOn(
           service as unknown as {
@@ -919,42 +992,366 @@ describe('ReservationService', () => {
         .mockRejectedValue(new Error('broker caído'));
 
       await expect(
-        service.consumeServedOrder({
-          orderId: 'O-1',
-          eventId: 'E-1',
-          items: [{ itemId: ITEM_A, quantity: 1 }],
-        }),
-      ).resolves.toBeNull();
+        service.consumeServedOrder({ orderId: 'O-1', eventId: 'E-1' }),
+      ).resolves.toMatchObject({ status: ReservationStatus.CONSUMED });
 
       expect(publishResultSpy).toHaveBeenCalled();
     });
   });
 
-  describe('aggregateItems', () => {
-    it('agrupa items válidos y descarta los inválidos', () => {
-      const result = (
-        service as unknown as {
-          aggregateItems: (items: unknown) => {
-            valid: Array<{ itemId: string; quantity: number }>;
-            invalid: unknown[];
-          };
-        }
-      ).aggregateItems([
-        { plateId: 'P-1', quantity: 1 },
-        { itemId: ITEM_A, quantity: 2 },
-        { itemId: 'invalido', quantity: 1 },
-        { itemId: ITEM_B, quantity: 0 },
-      ]);
+  describe('cancelación de una orden ya servida', () => {
+    it('no libera stock y publica un rechazo indicando registrar merma', async () => {
+      findOneExec.mockResolvedValue(
+        reservation({
+          status: ReservationStatus.CONSUMED,
+          items: [{ itemId: new Types.ObjectId(ITEM_A), quantity: 2 }],
+        }),
+      );
 
-      expect(result.valid).toEqual([{ itemId: ITEM_A, quantity: 2 }]);
-      expect(result.invalid).toHaveLength(3);
-      expect(
-        (
-          service as unknown as {
-            aggregateItems: (items: unknown) => unknown;
-          }
-        ).aggregateItems('invalido'),
-      ).toEqual({ valid: [], invalid: [] });
+      await service.release('O-1', undefined, 'Cliente desistió', {
+        eventId: 'E-9',
+      });
+
+      expect(itemService.adjustReservedStock).not.toHaveBeenCalled();
+      expect(publisher.publish).toHaveBeenCalledWith(
+        INVENTORY_EXCHANGE,
+        InventoryRoutingKeys.ReservationRejected,
+        expect.objectContaining({
+          orderId: 'O-1',
+          eventId: 'E-9',
+          errorCode: 'ALREADY_SERVED',
+          reason: expect.stringContaining('merma'),
+        }),
+      );
+    });
+
+    it('la expiración de una reserva consumida no publica rechazo', async () => {
+      findOneExec.mockResolvedValue(
+        reservation({ status: ReservationStatus.CONSUMED }),
+      );
+
+      await service.release('O-1', ReservationStatus.EXPIRED);
+
+      expect(publisher.publish).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('receta no encontrada o incompleta al reservar', () => {
+    it('rechaza con RECIPE_NOT_FOUND cuando el platillo no tiene receta', async () => {
+      findOneExec.mockResolvedValue(null);
+      recipeFindExec.mockResolvedValue(null);
+
+      await expect(
+        service.reserve({
+          orderId: 'O-1',
+          eventId: 'E-1',
+          items: [{ plateId: 'PLATE-X', quantity: 1 }],
+        }),
+      ).resolves.toBeNull();
+
+      expect(itemService.reserveStock).not.toHaveBeenCalled();
+      expect(publisher.publish).toHaveBeenCalledWith(
+        INVENTORY_EXCHANGE,
+        InventoryRoutingKeys.ReservationRejected,
+        expect.objectContaining({
+          errorCode: 'RECIPE_NOT_FOUND',
+          reason: expect.stringContaining('PLATE-X'),
+          eventId: 'E-1',
+        }),
+      );
+    });
+
+    it('rechaza con RECIPE_INCOMPLETE cuando la receta tiene insumos inexistentes', async () => {
+      findOneExec.mockResolvedValue(null);
+      recipeFindExec.mockResolvedValue({
+        plateId: 'PLATE-INC',
+        isComplete: false,
+        items: [{ itemId: new Types.ObjectId(ITEM_A), requiredQuantity: 1 }],
+      });
+
+      await service.reserve({
+        orderId: 'O-1',
+        items: [{ plateId: 'PLATE-INC', quantity: 1 }],
+      });
+
+      expect(itemService.reserveStock).not.toHaveBeenCalled();
+      expect(publisher.publish).toHaveBeenCalledWith(
+        INVENTORY_EXCHANGE,
+        InventoryRoutingKeys.ReservationRejected,
+        expect.objectContaining({ errorCode: 'RECIPE_INCOMPLETE' }),
+      );
+    });
+
+    it('marca el rechazo por stock con INSUFFICIENT_STOCK', async () => {
+      findOneExec.mockResolvedValue(null);
+      itemService.findOne.mockResolvedValue(item(ITEM_A, 1));
+
+      await service.reserve({
+        orderId: 'O-1',
+        items: [{ itemId: ITEM_A, quantity: 5 }],
+      });
+
+      expect(publisher.publish).toHaveBeenCalledWith(
+        INVENTORY_EXCHANGE,
+        InventoryRoutingKeys.ReservationRejected,
+        expect.objectContaining({ errorCode: 'INSUFFICIENT_STOCK' }),
+      );
+    });
+  });
+
+  describe('respuestas para Órdenes (contrato de integración)', () => {
+    const PLATE = 'PLATE-1';
+
+    function recipeWith(itemId: string, name = 'Hamburguesa') {
+      return {
+        plateId: PLATE,
+        name,
+        isComplete: true,
+        items: [{ itemId: new Types.ObjectId(itemId), requiredQuantity: 2 }],
+      };
+    }
+
+    it('confirma la reserva con las claves en inglés y español en ambos exchanges', async () => {
+      findOneExec.mockResolvedValue(null);
+      recipeFindExec.mockResolvedValue(recipeWith(ITEM_A));
+      itemService.findOne.mockResolvedValue(item(ITEM_A, 20));
+      itemService.reserveStock.mockResolvedValue(item(ITEM_A, 20, 4));
+      save.mockResolvedValue({
+        orderId: 'O-1',
+        status: ReservationStatus.PENDING,
+        items: [{ itemId: new Types.ObjectId(ITEM_A), quantity: 4 }],
+        correlationId: 'C-1',
+      });
+
+      await service.reserve({
+        orderId: 'O-1',
+        items: [{ plateId: PLATE, offerId: 'offer-1', quantity: 2 }],
+      });
+
+      const payload = expect.objectContaining({
+        orderId: 'O-1',
+        correlationId: 'C-1',
+        reservations: [{ ingredientId: ITEM_A, reservedQuantity: 4 }],
+      });
+      for (const exchange of new Set([INVENTORY_EXCHANGE, INTEGRATION_EXCHANGE])) {
+        expect(publisher.publish).toHaveBeenCalledWith(
+          exchange,
+          InventoryRoutingKeys.StockReserved,
+          payload,
+        );
+        expect(publisher.publish).toHaveBeenCalledWith(
+          exchange,
+          InventoryRoutingKeyAliases.StockReserved,
+          payload,
+        );
+      }
+    });
+
+    it('guarda en la reserva el platillo y la oferta que la originaron', async () => {
+      findOneExec.mockResolvedValue(null);
+      recipeFindExec.mockResolvedValue(recipeWith(ITEM_A));
+      itemService.findOne.mockResolvedValue(item(ITEM_A, 20));
+      itemService.reserveStock.mockResolvedValue(item(ITEM_A, 20, 4));
+      save.mockImplementation(async function (this: any) {
+        return this;
+      });
+
+      const saved: any = await service.reserve({
+        orderId: 'O-1',
+        items: [{ plateId: PLATE, offerId: 'offer-1', quantity: 2 }],
+      });
+
+      expect(saved.lines).toEqual([
+        { offerId: 'offer-1', plateId: PLATE, quantity: 2 },
+      ]);
+    });
+
+    it('informa stock insuficiente con el platillo afectado por su oferta', async () => {
+      findOneExec.mockResolvedValue(null);
+      recipeFindExec.mockResolvedValue(recipeWith(ITEM_A));
+      itemService.findOne.mockResolvedValue(item(ITEM_A, 1));
+
+      await service.reserve({
+        orderId: 'O-1',
+        eventId: 'E-1',
+        items: [{ plateId: PLATE, offerId: 'offer-1', quantity: 2 }],
+      });
+
+      for (const routingKey of [
+        InventoryRoutingKeys.StockInsufficient,
+        InventoryRoutingKeyAliases.StockInsufficient,
+      ]) {
+        expect(publisher.publish).toHaveBeenCalledWith(
+          INTEGRATION_EXCHANGE,
+          routingKey,
+          expect.objectContaining({
+            orderId: 'O-1',
+            errorCode: 'INSUFFICIENT_STOCK',
+            missingIngredients: [`Item ${ITEM_A}`],
+            rejectedItems: [
+              {
+                offerId: 'offer-1',
+                itemName: 'Hamburguesa',
+                requestedQuantity: 2,
+                availableQuantity: 0,
+              },
+            ],
+            reservedItems: [],
+          }),
+        );
+      }
+    });
+
+    it('separa los platillos con stock de los rechazados', async () => {
+      findOneExec.mockResolvedValue(null);
+      recipeFindExec
+        .mockResolvedValueOnce(recipeWith(ITEM_A))
+        .mockResolvedValueOnce(recipeWith(ITEM_B, 'Papas'))
+        .mockResolvedValueOnce(recipeWith(ITEM_A))
+        .mockResolvedValueOnce(recipeWith(ITEM_B, 'Papas'));
+      itemService.findOne
+        .mockResolvedValueOnce(item(ITEM_A, 1))
+        .mockResolvedValueOnce(item(ITEM_B, 50));
+
+      await service.reserve({
+        orderId: 'O-1',
+        items: [
+          { plateId: 'PLATE-1', offerId: 'offer-1', quantity: 2 },
+          { plateId: 'PLATE-2', offerId: 'offer-2', quantity: 1 },
+        ],
+      });
+
+      expect(publisher.publish).toHaveBeenCalledWith(
+        INTEGRATION_EXCHANGE,
+        InventoryRoutingKeys.StockInsufficient,
+        expect.objectContaining({
+          rejectedItems: [expect.objectContaining({ offerId: 'offer-1' })],
+          reservedItems: [{ offerId: 'offer-2', quantity: 1 }],
+        }),
+      );
+    });
+
+    it('un rechazo por receta inexistente también llega a Órdenes', async () => {
+      findOneExec.mockResolvedValue(null);
+      recipeFindExec.mockResolvedValue(null);
+
+      await service.reserve({
+        orderId: 'O-1',
+        items: [{ plateId: 'PLATE-X', offerId: 'offer-x', quantity: 1 }],
+      });
+
+      expect(publisher.publish).toHaveBeenCalledWith(
+        INTEGRATION_EXCHANGE,
+        InventoryRoutingKeyAliases.StockInsufficient,
+        expect.objectContaining({
+          errorCode: 'RECIPE_NOT_FOUND',
+          rejectedItems: [expect.objectContaining({ offerId: 'offer-x' })],
+        }),
+      );
+    });
+
+    it('cancelar una orden ya servida no la marca como rechazada en Órdenes', async () => {
+      findOneExec.mockResolvedValue(
+        reservation({ status: ReservationStatus.CONSUMED }),
+      );
+
+      await service.release('O-1');
+
+      const keys = publisher.publish.mock.calls.map((call) => call[1]);
+      expect(keys).toContain(InventoryRoutingKeys.ReservationRejected);
+      expect(keys).not.toContain(InventoryRoutingKeys.StockInsufficient);
+      expect(keys).not.toContain(InventoryRoutingKeyAliases.StockInsufficient);
+    });
+  });
+
+  describe('releaseDish (platillo rechazado por cocina)', () => {
+    const activeReservation = () =>
+      reservation({
+        status: ReservationStatus.CONFIRMED,
+        items: [
+          { itemId: new Types.ObjectId(ITEM_A), quantity: 4 },
+          { itemId: new Types.ObjectId(ITEM_B), quantity: 1 },
+        ],
+        lines: [
+          { offerId: 'offer-1', plateId: 'PLATE-1', quantity: 2 },
+          { offerId: 'offer-2', plateId: 'PLATE-2', quantity: 1 },
+        ],
+      });
+
+    beforeEach(() => {
+      recipeFindExec.mockResolvedValue({
+        plateId: 'PLATE-1',
+        isComplete: true,
+        items: [{ itemId: new Types.ObjectId(ITEM_A), requiredQuantity: 2 }],
+      });
+      findOneAndUpdateExec.mockResolvedValue({});
+    });
+
+    it('devuelve solo el stock reservado del platillo y conserva el resto', async () => {
+      findOneExec.mockResolvedValue(activeReservation());
+
+      const outcome = await service.releaseDish({
+        orderId: 'O-1',
+        offerId: 'offer-1',
+        quantity: 1,
+        reason: 'Sin carne',
+      });
+
+      expect(outcome).toBe('released');
+      expect(itemService.adjustReservedStock).toHaveBeenCalledTimes(1);
+      expect(itemService.adjustReservedStock).toHaveBeenCalledWith(ITEM_A, -2);
+
+      const update = model.findOneAndUpdate.mock.calls[0][1];
+      expect(update.items).toEqual([
+        { itemId: expect.anything(), quantity: 2 },
+        { itemId: expect.anything(), quantity: 1 },
+      ]);
+      expect(update.lines).toEqual([
+        { offerId: 'offer-1', plateId: 'PLATE-1', quantity: 1 },
+        expect.objectContaining({ offerId: 'offer-2' }),
+      ]);
+      expect(update.status).toBeUndefined();
+    });
+
+    it('libera la reserva completa cuando no queda nada reservado', async () => {
+      findOneExec.mockResolvedValue(
+        reservation({
+          status: ReservationStatus.CONFIRMED,
+          items: [{ itemId: new Types.ObjectId(ITEM_A), quantity: 2 }],
+          lines: [{ offerId: 'offer-1', plateId: 'PLATE-1', quantity: 1 }],
+        }),
+      );
+
+      await service.releaseDish({
+        orderId: 'O-1',
+        plateId: 'PLATE-1',
+        quantity: 1,
+      });
+
+      expect(model.findOneAndUpdate.mock.calls[0][1]).toMatchObject({
+        items: [],
+        status: ReservationStatus.RELEASED,
+      });
+    });
+
+    it('no toca una reserva que ya no está activa', async () => {
+      findOneExec.mockResolvedValue(
+        reservation({ status: ReservationStatus.RELEASED }),
+      );
+
+      await expect(
+        service.releaseDish({ orderId: 'O-1', plateId: 'PLATE-1', quantity: 1 }),
+      ).resolves.toBe('not-active');
+      expect(itemService.adjustReservedStock).not.toHaveBeenCalled();
+    });
+
+    it('avisa cuando no se puede determinar la receta del platillo', async () => {
+      findOneExec.mockResolvedValue(activeReservation());
+
+      await expect(
+        service.releaseDish({ orderId: 'O-1', offerId: 'otra', quantity: 1 }),
+      ).resolves.toBe('unresolved');
+      expect(model.findOneAndUpdate).not.toHaveBeenCalled();
     });
   });
 

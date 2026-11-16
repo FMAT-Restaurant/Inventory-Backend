@@ -2,15 +2,20 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { EventConsumer } from '../../broker/event-customer.service.js';
 import { EventSubscriptions } from '../../broker/event-subscriptions.js';
 import {
+  DishRejectedEvent,
   ORDERS_EVENTS_QUEUE,
-  ORDERS_EXCHANGE,
+  ORDERS_EXCHANGES,
   OrderEvent,
   OrderEventItem,
+  OrderWastedEvent,
+  OrdersRoutingKeyAliases,
   OrdersRoutingKeys,
+  WastedLine,
 } from '../../broker/event-conventions.js';
 import { ProcessedEventService } from '../processed-event/processed-event.service.js';
 import { ReservationService } from './reservation.service.js';
 import { RecipeService } from '../recipe/recipe.service.js';
+import { WasteService } from './waste.service.js';
 
 const CONSUMER_NAME = 'orders-events';
 
@@ -23,22 +28,39 @@ export class OrdersEvents implements OnModuleInit {
     private readonly reservationService: ReservationService,
     private readonly processedEvents: ProcessedEventService,
     private readonly recipeService: RecipeService,
+    private readonly wasteService: WasteService,
   ) {}
 
   async onModuleInit(): Promise<void> {
-    const subscriptions = new EventSubscriptions()
-      .on(ORDERS_EXCHANGE, OrdersRoutingKeys.OrderCreated, (payload) =>
-        this.handleCreated(payload),
-      )
-      .on(ORDERS_EXCHANGE, OrdersRoutingKeys.OrderConfirmed, (payload) =>
-        this.handleConfirmed(payload),
-      )
-      .on(ORDERS_EXCHANGE, OrdersRoutingKeys.OrderCancelled, (payload) =>
-        this.handleCancelled(payload),
-      )
-      .on(ORDERS_EXCHANGE, OrdersRoutingKeys.OrderServed, (payload) =>
-        this.handleServed(payload),
-      );
+    const handlers: Record<
+      keyof typeof OrdersRoutingKeys,
+      (payload: unknown) => Promise<void>
+    > = {
+      OrderCreated: (payload) => this.handleCreated(payload),
+      OrderConfirmed: (payload) => this.handleConfirmed(payload),
+      OrderCancelled: (payload) => this.handleCancelled(payload),
+      OrderServed: (payload) => this.handleServed(payload),
+      OrderExpired: (payload) => this.handleExpired(payload),
+      OrderWasted: (payload) => this.handleWasted(payload),
+      DishRejected: (payload) => this.handleDishRejected(payload),
+    };
+
+    // Órdenes emite cada evento con su clave en inglés y en español; se
+    // suscriben ambas en cada exchange donde puede publicar.
+    const subscriptions = new EventSubscriptions();
+    for (const exchange of ORDERS_EXCHANGES) {
+      for (const name of Object.keys(OrdersRoutingKeys) as Array<
+        keyof typeof OrdersRoutingKeys
+      >) {
+        const keys = [
+          OrdersRoutingKeys[name],
+          ...OrdersRoutingKeyAliases[name],
+        ];
+        for (const routingKey of keys) {
+          subscriptions.on(exchange, routingKey, handlers[name]);
+        }
+      }
+    }
 
     try {
       await this.consumer.consumeSubscriptions(
@@ -47,7 +69,7 @@ export class OrdersEvents implements OnModuleInit {
         { durable: true },
       );
       this.logger.log(
-        `✅ Suscrito a los eventos de órdenes en '${ORDERS_EXCHANGE}' (cola '${ORDERS_EVENTS_QUEUE}')`,
+        `✅ Suscrito a los eventos de órdenes en '${ORDERS_EXCHANGES.join("', '")}' (cola '${ORDERS_EVENTS_QUEUE}')`,
       );
     } catch (error) {
       // El consumidor conserva las suscripciones y reintenta reconectar.
@@ -115,6 +137,7 @@ export class OrdersEvents implements OnModuleInit {
       event.orderId,
       undefined,
       event.reason ?? 'Orden cancelada',
+      { eventId: event.eventId, correlationId: event.correlationId },
     );
     await this.markProcessed(event);
   }
@@ -151,6 +174,153 @@ export class OrdersEvents implements OnModuleInit {
       );
       throw error;
     }
+  }
+
+  private async handleExpired(payload: unknown): Promise<void> {
+    const event = this.parseEvent(payload);
+    if (!event) {
+      this.logger.warn(
+        `⚠️ Evento '${OrdersRoutingKeys.OrderExpired}' con payload inválido. Se ignora: ${JSON.stringify(payload)}`,
+      );
+      return;
+    }
+
+    if (await this.alreadyProcessed(event)) {
+      return;
+    }
+
+    // Garantiza que no queden reservas huérfanas de una orden que expiró.
+    await this.reservationService.release(
+      event.orderId,
+      undefined,
+      event.reason ?? 'Orden expirada',
+      { eventId: event.eventId, correlationId: event.correlationId },
+    );
+    await this.markProcessed(event);
+  }
+
+  private async handleWasted(payload: unknown): Promise<void> {
+    const event = this.parseWastedEvent(payload);
+    if (!event) {
+      this.logger.warn(
+        `⚠️ Evento '${OrdersRoutingKeys.OrderWasted}' con payload inválido. Se ignora: ${JSON.stringify(payload)}`,
+      );
+      return;
+    }
+
+    await this.runOnce(event, () => this.wasteService.registerOrderWaste(event));
+  }
+
+  private async handleDishRejected(payload: unknown): Promise<void> {
+    const event = this.parseDishRejectedEvent(payload);
+    if (!event) {
+      this.logger.warn(
+        `⚠️ Evento '${OrdersRoutingKeys.DishRejected}' con payload inválido. Se ignora: ${JSON.stringify(payload)}`,
+      );
+      return;
+    }
+
+    await this.runOnce(event, () => this.wasteService.handleDishRejected(event));
+  }
+
+  /**
+   * Procesa un evento una sola vez aunque lleguen copias a la vez (Órdenes
+   * emite cada evento con dos claves). Si falla, se libera para reintentar.
+   */
+  private async runOnce(
+    event: { eventId: string; orderId: string },
+    work: () => Promise<unknown>,
+  ): Promise<void> {
+    const claimed = await this.processedEvents.claim(
+      CONSUMER_NAME,
+      event.eventId,
+    );
+    if (!claimed) {
+      this.logger.log(
+        `🔁 Evento '${event.eventId}' ya procesado para la orden '${event.orderId}'.`,
+      );
+      return;
+    }
+
+    try {
+      await work();
+    } catch (error) {
+      await this.processedEvents.release(CONSUMER_NAME, event.eventId);
+      throw error;
+    }
+  }
+
+  private parseWastedEvent(payload: unknown): OrderWastedEvent | null {
+    if (!this.isRecord(payload)) {
+      return null;
+    }
+    const eventId = this.asNonEmptyString(payload.eventId);
+    const orderId = this.asNonEmptyString(payload.orderId);
+    if (!eventId || !orderId) {
+      return null;
+    }
+
+    const rawLines = Array.isArray(payload.itemsAfectados)
+      ? payload.itemsAfectados
+      : Array.isArray(payload.items)
+        ? payload.items
+        : [];
+    const lines: WastedLine[] = [];
+    for (const raw of rawLines) {
+      if (!this.isRecord(raw)) continue;
+      const quantity = this.toPositiveQuantity(raw.quantity);
+      if (quantity === null) continue;
+      const plateId =
+        this.getNonEmptyString(raw.plateId) ??
+        this.getNonEmptyString(raw.sourceId);
+      const offerId = this.getNonEmptyString(raw.offerId);
+      if (!plateId && !offerId) continue;
+      lines.push({ plateId, offerId, quantity });
+    }
+    if (lines.length === 0) {
+      return null;
+    }
+
+    return {
+      eventId,
+      orderId,
+      correlationId: this.asNonEmptyString(payload.correlationId),
+      reason:
+        this.asNonEmptyString(payload.reason) ??
+        this.asNonEmptyString(payload.motivo) ??
+        'Merma reportada por Órdenes',
+      lines,
+    };
+  }
+
+  private parseDishRejectedEvent(payload: unknown): DishRejectedEvent | null {
+    if (!this.isRecord(payload)) {
+      return null;
+    }
+    const eventId = this.asNonEmptyString(payload.eventId);
+    const orderId = this.asNonEmptyString(payload.orderId);
+    const quantity = this.toPositiveQuantity(payload.quantity);
+    const plateId =
+      this.getNonEmptyString(payload.plateId) ??
+      this.getNonEmptyString(payload.sourceId);
+    const offerId = this.getNonEmptyString(payload.offerId);
+    if (!eventId || !orderId || quantity === null || (!plateId && !offerId)) {
+      return null;
+    }
+
+    return {
+      eventId,
+      orderId,
+      correlationId: this.asNonEmptyString(payload.correlationId),
+      itemId: this.asNonEmptyString(payload.itemId),
+      offerId,
+      plateId,
+      quantity,
+      reason:
+        this.asNonEmptyString(payload.reason) ??
+        this.asNonEmptyString(payload.motivo) ??
+        'Platillo rechazado por cocina',
+    };
   }
 
   private parseEvent(payload: unknown): OrderEvent | null {
@@ -201,9 +371,17 @@ export class OrdersEvents implements OnModuleInit {
       return null;
     }
 
-    const plateId = this.getNonEmptyString(raw.plateId);
+    // `plateId` (Inventario) y `sourceId` (Menú) son la misma receta.
+    const plateId =
+      this.getNonEmptyString(raw.plateId) ??
+      this.getNonEmptyString(raw.sourceId);
     if (plateId) {
-      return { plateId, quantity } as OrderEventItem;
+      const offerId = this.getNonEmptyString(raw.offerId);
+      return {
+        plateId,
+        quantity,
+        ...(offerId ? { offerId } : {}),
+      } as OrderEventItem;
     }
 
     const itemIdDirect = this.getNonEmptyString(raw.itemId);
@@ -241,7 +419,7 @@ export class OrdersEvents implements OnModuleInit {
       : undefined;
   }
 
-  private async alreadyProcessed(event: OrderEvent): Promise<boolean> {
+  private async alreadyProcessed(event: { eventId: string; orderId: string }): Promise<boolean> {
     const processed = await this.processedEvents.isProcessed(
       CONSUMER_NAME,
       event.eventId,
@@ -254,7 +432,7 @@ export class OrdersEvents implements OnModuleInit {
     return processed;
   }
 
-  private async markProcessed(event: OrderEvent): Promise<void> {
+  private async markProcessed(event: { eventId: string }): Promise<void> {
     await this.processedEvents.markProcessed(CONSUMER_NAME, event.eventId);
   }
 }

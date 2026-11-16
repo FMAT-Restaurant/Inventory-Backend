@@ -30,6 +30,28 @@ export class ProcessedEventService {
     }
   }
 
+  /**
+   * Reclama un evento antes de procesarlo. A diferencia de `isProcessed` +
+   * `markProcessed`, es atómico: si dos copias del mismo evento llegan a la
+   * vez, solo una obtiene `true`. Úsalo con efectos que no son idempotentes.
+   */
+  async claim(consumer: string, eventId: string): Promise<boolean> {
+    try {
+      await this.processedEventModel.create({ consumer, eventId });
+      return true;
+    } catch (error) {
+      if (this.isDuplicateKeyError(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /** Devuelve un evento reclamado cuando su procesamiento falló, para reintentarlo. */
+  async release(consumer: string, eventId: string): Promise<void> {
+    await this.processedEventModel.deleteOne({ consumer, eventId }).exec();
+  }
+
   private isDuplicateKeyError(error: unknown): boolean {
     return (
       error instanceof Error &&

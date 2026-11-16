@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { BatchController } from './batch.controller.js';
+import { SupplierCostHistoryController } from './supplier-cost-history.controller.js';
 import { BatchService } from './batch.service.js';
 import { Batch, BatchSchema } from './schemas/batch.schema.js';
 import { ItemsModule } from '../item/item.module.js';
@@ -18,7 +19,7 @@ import { StockMovementModule } from '../stock-movement/stock-movement.module.js'
     StockMovementModule,
     SuppliersModule,
   ],
-  controllers: [BatchController],
+  controllers: [BatchController, SupplierCostHistoryController],
   providers: [BatchService, BatchEvents, BatchExpiryService],
   exports: [BatchService],
 })

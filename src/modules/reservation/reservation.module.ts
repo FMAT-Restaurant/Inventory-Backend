@@ -12,6 +12,8 @@ import { ReservationCacheService } from './reservation-cache.service.js';
 import { ReservationController } from './reservation.controller.js';
 import { ReservationExpiryService } from './reservation-expiry.service.js';
 import { ReservationService } from './reservation.service.js';
+import { WasteController } from './waste.controller.js';
+import { WasteService } from './waste.service.js';
 import {
   StockReservation,
   StockReservationSchema,
@@ -30,12 +32,13 @@ import {
     BrokerModule,
     ProcessedEventModule,
   ],
-  controllers: [ReservationController],
+  controllers: [ReservationController, WasteController],
   providers: [
     ReservationService,
     ReservationCacheService,
     ReservationExpiryService,
     OrdersEvents,
+    WasteService,
   ],
   exports: [ReservationService],
 })

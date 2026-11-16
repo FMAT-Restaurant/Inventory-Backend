@@ -11,6 +11,25 @@ export const MENU_EXCHANGE = 'menu.topic';
 // Contrato provisional: debe validarse con el equipo de Órdenes antes de producción.
 export const ORDERS_EXCHANGE = 'ordenes.topic';
 
+// Exchange principal del contrato de integración con Órdenes & KDS
+// (`restaurant.events`). Se puede cambiar con INTEGRATION_EXCHANGE.
+export const INTEGRATION_EXCHANGE =
+  process.env.INTEGRATION_EXCHANGE?.trim() || 'restaurant.events';
+
+// Exchanges en los que se escuchan los eventos de órdenes. Por defecto el
+// exchange propio y el del contrato; se puede sobreescribir con
+// ORDERS_EXCHANGES (lista separada por comas).
+export const ORDERS_EXCHANGES: readonly string[] = Array.from(
+  new Set(
+    (process.env.ORDERS_EXCHANGES?.trim()
+      ? process.env.ORDERS_EXCHANGES.split(',')
+      : [ORDERS_EXCHANGE, INTEGRATION_EXCHANGE]
+    )
+      .map((name) => name.trim())
+      .filter((name) => name.length > 0),
+  ),
+);
+
 // Único exchange por el que publica este microservicio (inventario)
 export const INVENTORY_EXCHANGE = 'inventory.topic';
 
@@ -28,17 +47,46 @@ export const OrdersRoutingKeys = {
   OrderConfirmed: 'ordenes.order.confirmed',
   OrderCancelled: 'ordenes.order.cancelled',
   OrderServed: 'ordenes.order.served',
+  OrderExpired: 'ordenes.order.expired',
+  OrderWasted: 'ordenes.order.wasted',
+  DishRejected: 'ordenes.dish.rejected',
 } as const;
+
+// Alias en español de las mismas claves (Órdenes emite ambas variantes).
+// `OrderServed` también llega como `en_preparacion`: es el momento en que
+// cocina empieza a preparar y se descuenta el stock.
+export const OrdersRoutingKeyAliases: Record<
+  keyof typeof OrdersRoutingKeys,
+  readonly string[]
+> = {
+  OrderCreated: ['ordenes.orden.creada'],
+  OrderConfirmed: ['ordenes.orden.confirmada'],
+  OrderCancelled: ['ordenes.orden.cancelada'],
+  OrderServed: ['ordenes.orden.en_preparacion'],
+  OrderExpired: ['ordenes.orden.expirada'],
+  OrderWasted: ['ordenes.comanda.mermada'],
+  DishRejected: ['ordenes.platillo.rechazado_cocina'],
+};
 
 // Routing keys que publica el inventario
 export const InventoryRoutingKeys = {
   RecipeAvailabilityChanged: 'inventory.recipe.availability-changed',
   RecipeNotAvailable: 'inventory.recipe.not-available',
+  RecipeIncomplete: 'inventory.recipe.incomplete',
   ReservationConfirmed: 'inventory.reservation.confirmed',
   ReservationRejected: 'inventory.reservation.rejected',
   ReservationReleased: 'inventory.reservation.released',
   ReservationExpired: 'inventory.reservation.expired',
   ReservationConsumed: 'inventory.reservation.consumed',
+  // Respuestas de reserva que espera Órdenes (contrato de integración)
+  StockReserved: 'inventory.stock.reserved',
+  StockInsufficient: 'inventory.stock.insufficient',
+} as const;
+
+// Variante en español de las respuestas de reserva
+export const InventoryRoutingKeyAliases = {
+  StockReserved: 'inventario.stock.reservado',
+  StockInsufficient: 'inventario.stock.insuficiente',
 } as const;
 
 // Una cola por dominio suscriptor de este microservicio
@@ -78,6 +126,14 @@ export interface RecipeNotAvailableIngredient {
   availableStock: number;
 }
 
+// Alerta: receta registrada por evento con insumos inexistentes en el catálogo
+export interface RecipeIncompleteEvent {
+  plateId: string;
+  name: string;
+  missingItemIds: string[];
+  timestamp: string;
+}
+
 export interface RecipeNotAvailableEvent {
   plateId: string;
   name: string;
@@ -87,13 +143,43 @@ export interface RecipeNotAvailableEvent {
 
 // Envelope de eventos de órdenes (contrato provisional v1).
 export interface OrderEventItem {
-  // Lo más común que envíe Órdenes: platillo
+  // Receta (`plateId` de Inventario = `sourceId` de Menú)
   plateId?: string;
+  // Oferta comercial de Menú: solo trazabilidad y respuesta a Órdenes
+  offerId?: string;
   // Se deja comentado/soportado por si al final envían itemId directamente
   // itemId?: string;
   quantity?: number;
   // También soportar itemId directamente si llega en el payload
   itemId?: string;
+}
+
+// Platillo afectado por una merma (`ordenes.order.wasted`)
+export interface WastedLine {
+  offerId?: string;
+  plateId?: string;
+  quantity: number;
+}
+
+// `ordenes.dish.rejected`: un platillo rechazado por cocina
+export interface DishRejectedEvent {
+  eventId: string;
+  orderId: string;
+  correlationId?: string;
+  itemId?: string;
+  offerId?: string;
+  plateId?: string;
+  quantity: number;
+  reason: string;
+}
+
+// `ordenes.order.wasted`: comanda anulada por merma
+export interface OrderWastedEvent {
+  eventId: string;
+  orderId: string;
+  correlationId?: string;
+  reason: string;
+  lines: WastedLine[];
 }
 
 export interface OrderEvent {
@@ -120,6 +206,11 @@ export interface ReservationResultEvent {
   eventId?: string;
   correlationId?: string;
   reason?: string;
+  /**
+   * Código estable del motivo de rechazo (p. ej. RECIPE_NOT_FOUND,
+   * INSUFFICIENT_STOCK, ALREADY_SERVED). Opcional y aditivo.
+   */
+  errorCode?: string;
   items?: ReservationResultItem[];
   timestamp: string;
 }

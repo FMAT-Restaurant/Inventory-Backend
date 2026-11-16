@@ -24,6 +24,14 @@ export class Recipe extends Document {
 
   @Prop({ type: Boolean, default: true })
   lastKnownAvailability: boolean;
+
+  // Una receta llegada por evento con insumos que no existen en el catálogo
+  // se guarda como incompleta (no se descarta) para poder revisarla.
+  @Prop({ type: Boolean, default: true })
+  isComplete: boolean;
+
+  @Prop({ type: [String], default: [] })
+  missingItemIds: string[];
 }
 
 export const RecipeSchema = SchemaFactory.createForClass(Recipe);

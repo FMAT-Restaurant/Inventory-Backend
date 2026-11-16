@@ -36,6 +36,11 @@ export class Batch extends Document {
   @Prop({ required: true, min: 0 })
   cost: number;
 
+  // Costo unitario de compra al dar de alta el lote. No cambia aunque se
+  // corrija `cost` después: es la base del historial de costos por proveedor.
+  @Prop({ required: false, min: 0 })
+  purchaseCost?: number;
+
   @Prop({
     required: true,
     type: String,
@@ -48,3 +53,4 @@ export class Batch extends Document {
 export const BatchSchema = SchemaFactory.createForClass(Batch);
 
 BatchSchema.index({ itemId: 1, batchNumber: 1 }, { unique: true });
+BatchSchema.index({ supplierId: 1, createdAt: 1 });

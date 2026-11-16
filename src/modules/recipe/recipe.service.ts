@@ -21,6 +21,7 @@ import {
   INVENTORY_EXCHANGE,
   InventoryRoutingKeys,
   RecipeAvailabilityChangedEvent,
+  RecipeIncompleteEvent,
   RecipeNotAvailableEvent,
 } from '../../broker/event-conventions.js';
 import { Recipe } from './schemas/recipe.schema.js';
@@ -102,12 +103,24 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
     void this.publishAvailabilityForItem(event);
   };
 
+  /**
+   * Registra o actualiza una receta por plateId. Con `allowMissingItems`
+   * (recetas que llegan por evento) los insumos inexistentes no la
+   * descartan: se guarda como incompleta y se emite una alerta.
+   */
   async registerOrUpdate(
     createDto: CreateRecipeDto,
+    options: { allowMissingItems?: boolean } = {},
   ): Promise<{ recipe: RecipeResponseDto; isNew: boolean }> {
+    const requestedIds = createDto.items.map((i) => i.itemId);
     const itemMap = await this.validateAndFetchItems(
-      createDto.items.map((i) => i.itemId),
+      requestedIds,
+      !options.allowMissingItems,
     );
+    const missingItemIds = Array.from(new Set(requestedIds)).filter(
+      (id) => !itemMap.has(id),
+    );
+    const isComplete = missingItemIds.length === 0;
 
     let recipe = await this.recipeModel
       .findOne({ plateId: createDto.plateId })
@@ -117,6 +130,8 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
     if (recipe) {
       recipe.name = createDto.name;
       recipe.items = this.toRecipeItems(createDto.items) as any;
+      recipe.isComplete = isComplete;
+      recipe.missingItemIds = missingItemIds;
       await recipe.save();
     } else {
       isNew = true;
@@ -125,6 +140,8 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
           plateId: createDto.plateId,
           name: createDto.name,
           items: this.toRecipeItems(createDto.items),
+          isComplete,
+          missingItemIds,
         });
         await recipe.save();
       } catch (error) {
@@ -140,11 +157,40 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
     const response = this.buildResponseDto(recipe, itemMap);
     await this.persistAvailabilityState(recipe, response.isAvailable);
     await this.publishAvailabilityChanged(response);
+    if (!isComplete) {
+      await this.publishIncomplete(recipe, missingItemIds);
+    }
 
     return {
       recipe: response,
       isNew,
     };
+  }
+
+  private async publishIncomplete(
+    recipe: Recipe,
+    missingItemIds: string[],
+  ): Promise<void> {
+    this.logger.warn(
+      `⚠️ Receta '${recipe.plateId}' registrada como incompleta: insumos inexistentes ${missingItemIds.join(', ')}`,
+    );
+    const event: RecipeIncompleteEvent = {
+      plateId: recipe.plateId,
+      name: recipe.name,
+      missingItemIds,
+      timestamp: new Date().toISOString(),
+    };
+    try {
+      await this.publisher.publish(
+        INVENTORY_EXCHANGE,
+        InventoryRoutingKeys.RecipeIncomplete,
+        event,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `No se pudo publicar '${InventoryRoutingKeys.RecipeIncomplete}' para plateId '${recipe.plateId}': ${error}`,
+      );
+    }
   }
 
   async findAll(query?: QueryRecipesDto): Promise<RecipeResponseDto[]> {
@@ -189,6 +235,8 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
     if (updateDto.items && updateDto.items.length > 0) {
       await this.validateAndFetchItems(updateDto.items.map((i) => i.itemId));
       recipe.items = this.toRecipeItems(updateDto.items) as any;
+      recipe.isComplete = true;
+      recipe.missingItemIds = [];
     }
 
     if (updateDto.name !== undefined) {
@@ -295,7 +343,7 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
         const response = this.buildResponseDto(recipe, itemMap);
 
         await this.publishAvailabilityChanged(response);
-        //await this.handleUnavailabilityTransition(recipe, response);
+        await this.handleUnavailabilityTransition(recipe, response);
       } catch (error) {
         this.logger.error(
           `Error al recalcular disponibilidad de la receta '${recipe.plateId}' tras '${event.action}' del item '${event.itemId}':`,
@@ -309,20 +357,40 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
     recipe: Recipe,
     response: RecipeResponseDto,
   ): Promise<void> {
-    const wasAvailable = recipe.lastKnownAvailability !== false;
-    const isAvailable = response.isAvailable;
+    if (!response.isAvailable) {
+      // Solo se avisa en la transición disponible -> no disponible. El cambio
+      // de estado se reclama de forma atómica para que dos cambios de stock
+      // simultáneos no emitan el aviso dos veces.
+      const claimed = await this.recipeModel
+        .findOneAndUpdate(
+          { _id: recipe._id, lastKnownAvailability: { $ne: false } },
+          { lastKnownAvailability: false },
+          { new: true },
+        )
+        .exec();
+      if (!claimed) {
+        return;
+      }
 
-    if (wasAvailable && !isAvailable) {
       const published = await this.publishNotAvailable(response);
-      if (published) {
-        await this.persistAvailabilityState(recipe, false);
+      if (!published) {
+        // Sin broker no se pierde el aviso: se reintenta en el próximo cambio.
+        await this.recipeModel
+          .updateOne({ _id: recipe._id }, { lastKnownAvailability: true })
+          .exec();
       }
       return;
     }
 
-    if (recipe.lastKnownAvailability !== isAvailable) {
-      await this.persistAvailabilityState(recipe, isAvailable);
-    }
+    // Se marca como recuperada con un filtro en la base (no con el documento
+    // en memoria, que puede estar desactualizado) para que la próxima caída
+    // vuelva a avisar.
+    await this.recipeModel
+      .updateOne(
+        { _id: recipe._id, lastKnownAvailability: false },
+        { lastKnownAvailability: true },
+      )
+      .exec();
   }
 
   private async publishNotAvailable(
@@ -483,6 +551,8 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
       maxPreparablePortions: maxPortions === Infinity ? 0 : maxPortions,
       productionCost: Math.round(productionCost * 10000) / 10000,
       items: itemDetails,
+      isComplete: recipe.isComplete !== false,
+      missingItemIds: recipe.missingItemIds ?? [],
       createdAt: (recipe as any).createdAt,
       updatedAt: (recipe as any).updatedAt,
     };

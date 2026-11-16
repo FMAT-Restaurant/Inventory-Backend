@@ -25,6 +25,22 @@ export class ReservationItem {
 export const ReservationItemSchema =
   SchemaFactory.createForClass(ReservationItem);
 
+// Platillo que originó la reserva: permite relacionar la oferta de Menú
+// (`offerId`) con la receta (`plateId`) cuando llegan mermas de la orden.
+@Schema({ _id: false })
+export class ReservationLine {
+  @Prop({ type: String, default: null, trim: true })
+  offerId?: string | null;
+
+  @Prop({ type: String, required: true, trim: true })
+  plateId: string;
+
+  @Prop({ required: true, min: 0 })
+  quantity: number;
+}
+export const ReservationLineSchema =
+  SchemaFactory.createForClass(ReservationLine);
+
 @Schema({ collection: 'stock_reservations', timestamps: true })
 export class StockReservation extends Document {
   @Prop({ required: true, trim: true })
@@ -32,6 +48,9 @@ export class StockReservation extends Document {
 
   @Prop({ type: [ReservationItemSchema], required: true, default: [] })
   items: ReservationItem[];
+
+  @Prop({ type: [ReservationLineSchema], default: [] })
+  lines: ReservationLine[];
 
   @Prop({
     required: true,
