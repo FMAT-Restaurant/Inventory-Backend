@@ -20,6 +20,7 @@ describe('BatchService', () => {
   const mockExecFind = vi.fn();
   const mockExecFindById = vi.fn();
   const mockExecFindByIdAndUpdate = vi.fn();
+  const mockExecFindOneAndUpdate = vi.fn();
   const mockExecDeleteOne = vi.fn();
   const mockExecUpdateOne = vi.fn();
   const mockSave = vi.fn();
@@ -64,6 +65,9 @@ describe('BatchService', () => {
   MockModel.findByIdAndUpdate = vi
     .fn()
     .mockReturnValue({ exec: mockExecFindByIdAndUpdate });
+  MockModel.findOneAndUpdate = vi
+    .fn()
+    .mockReturnValue({ exec: mockExecFindOneAndUpdate });
   MockModel.deleteOne = vi.fn().mockReturnValue({ exec: mockExecDeleteOne });
   MockModel.updateOne = vi.fn().mockReturnValue({ exec: mockExecUpdateOne });
 
@@ -444,9 +448,30 @@ describe('BatchService', () => {
         expirationDate: new Date('2099-02-01'),
       });
 
+      const firstAfter = batchDoc({
+        _id: 'first',
+        quantity: 0,
+        cost: 10,
+        expirationDate: new Date('2099-01-01'),
+        status: BatchStatus.ACTIVE,
+      });
+      const secondAfter = batchDoc({
+        _id: 'second',
+        quantity: 2,
+        cost: 20,
+        expirationDate: new Date('2099-02-01'),
+        status: BatchStatus.ACTIVE,
+      });
+
       mockExecFind
         .mockResolvedValueOnce([expired, first, second])
-        .mockResolvedValueOnce([first, second]);
+        .mockResolvedValueOnce([
+          { ...firstAfter, status: BatchStatus.DEPLETED },
+          secondAfter,
+        ]);
+      mockExecFindOneAndUpdate
+        .mockResolvedValueOnce(firstAfter)
+        .mockResolvedValueOnce(secondAfter);
 
       await service.consumeByFefo(mockItemId, 6, 'ORD-1');
 
@@ -455,13 +480,22 @@ describe('BatchService', () => {
         expirationDate: 1,
         _id: 1,
       });
-      expect(expired.save).not.toHaveBeenCalled();
-      expect(first.quantity).toBe(0);
-      expect(first.status).toBe(BatchStatus.DEPLETED);
-      expect(first.save).toHaveBeenCalledOnce();
-      expect(second.quantity).toBe(2);
-      expect(second.status).toBe(BatchStatus.ACTIVE);
-      expect(second.save).toHaveBeenCalledOnce();
+      expect(MockModel.findOneAndUpdate).toHaveBeenNthCalledWith(
+        1,
+        { _id: 'first', quantity: { $gte: 3 } },
+        { $inc: { quantity: -3 } },
+        { new: true },
+      );
+      expect(MockModel.findOneAndUpdate).toHaveBeenNthCalledWith(
+        2,
+        { _id: 'second', quantity: { $gte: 3 } },
+        { $inc: { quantity: -3 } },
+        { new: true },
+      );
+      expect(MockModel.updateOne).toHaveBeenCalledWith(
+        { _id: 'first', quantity: { $lte: 0.0005 } },
+        { $set: { status: BatchStatus.DEPLETED } },
+      );
 
       expect(mockStockMovementService.record).toHaveBeenNthCalledWith(
         1,
@@ -491,14 +525,19 @@ describe('BatchService', () => {
 
     it('deja de consumir cuando cubre la cantidad solicitada', async () => {
       const batch = batchDoc({ _id: 'only', quantity: 10 });
+      const batchAfter = batchDoc({ _id: 'only', quantity: 6 });
       mockExecFind
         .mockResolvedValueOnce([batch])
-        .mockResolvedValueOnce([batch]);
+        .mockResolvedValueOnce([batchAfter]);
+      mockExecFindOneAndUpdate.mockResolvedValueOnce(batchAfter);
 
       await service.consumeByFefo(mockItemId, 4, undefined, 'Merma');
 
-      expect(batch.quantity).toBe(6);
-      expect(batch.save).toHaveBeenCalledOnce();
+      expect(MockModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'only', quantity: { $gte: 4 } },
+        { $inc: { quantity: -4 } },
+        { new: true },
+      );
       expect(mockStockMovementService.record).toHaveBeenCalledWith(
         expect.objectContaining({
           quantity: 4,
@@ -506,6 +545,77 @@ describe('BatchService', () => {
           reason: 'Merma',
         }),
       );
+    });
+
+    it('reintenta FEFO cuando otro consumo concurrente modifica el lote', async () => {
+      const staleFirst = batchDoc({
+        _id: 'first',
+        quantity: 5,
+        cost: 10,
+        expirationDate: new Date('2099-01-01'),
+      });
+      const freshFirst = batchDoc({
+        _id: 'first',
+        quantity: 2,
+        cost: 10,
+        expirationDate: new Date('2099-01-01'),
+      });
+      const second = batchDoc({
+        _id: 'second',
+        quantity: 5,
+        cost: 20,
+        expirationDate: new Date('2099-02-01'),
+      });
+      const freshFirstAfter = batchDoc({
+        _id: 'first',
+        quantity: 0,
+        cost: 10,
+        expirationDate: new Date('2099-01-01'),
+      });
+      const secondAfter = batchDoc({
+        _id: 'second',
+        quantity: 3,
+        cost: 20,
+        expirationDate: new Date('2099-02-01'),
+      });
+
+      mockExecFind
+        // Intento 1: encuentra staleFirst (5) pero contiende
+        .mockResolvedValueOnce([staleFirst, second])
+        // Intento 2: relee freshFirst (2) y second (5)
+        .mockResolvedValueOnce([freshFirst, second])
+        // Sincronización final de stock
+        .mockResolvedValueOnce([
+          { ...freshFirstAfter, status: BatchStatus.DEPLETED },
+          secondAfter,
+        ]);
+
+      mockExecFindOneAndUpdate
+        .mockResolvedValueOnce(null) // contención en intento 1
+        .mockResolvedValueOnce(freshFirstAfter)
+        .mockResolvedValueOnce(secondAfter);
+
+      await service.consumeByFefo(mockItemId, 4, 'ORD-RACE');
+
+      expect(MockModel.findOneAndUpdate).toHaveBeenNthCalledWith(
+        1,
+        { _id: 'first', quantity: { $gte: 4 } },
+        { $inc: { quantity: -4 } },
+        { new: true },
+      );
+      expect(MockModel.findOneAndUpdate).toHaveBeenNthCalledWith(
+        2,
+        { _id: 'first', quantity: { $gte: 2 } },
+        { $inc: { quantity: -2 } },
+        { new: true },
+      );
+      expect(MockModel.findOneAndUpdate).toHaveBeenNthCalledWith(
+        3,
+        { _id: 'second', quantity: { $gte: 2 } },
+        { $inc: { quantity: -2 } },
+        { new: true },
+      );
+      expect(mockStockMovementService.record).toHaveBeenCalledTimes(2);
     });
 
     it('omite lotes expirados o agotados y sincroniza stock en cero', async () => {
@@ -521,8 +631,7 @@ describe('BatchService', () => {
 
       await service.consumeByFefo(mockItemId, 2);
 
-      expect(expired.save).not.toHaveBeenCalled();
-      expect(depleted.save).not.toHaveBeenCalled();
+      expect(MockModel.findOneAndUpdate).not.toHaveBeenCalled();
       expect(mockStockMovementService.record).not.toHaveBeenCalled();
       expect(mockItemService.updateStockAndCost).toHaveBeenCalledWith(
         mockItemId,
@@ -533,9 +642,11 @@ describe('BatchService', () => {
 
     it('tolera que falle el registro de un movimiento', async () => {
       const batch = batchDoc({ _id: 'only', quantity: 5 });
+      const batchAfter = batchDoc({ _id: 'only', quantity: 3 });
       mockExecFind
         .mockResolvedValueOnce([batch])
-        .mockResolvedValueOnce([batch]);
+        .mockResolvedValueOnce([batchAfter]);
+      mockExecFindOneAndUpdate.mockResolvedValueOnce(batchAfter);
       mockStockMovementService.record.mockRejectedValueOnce(
         new Error('auditoría caída'),
       );
@@ -544,7 +655,7 @@ describe('BatchService', () => {
         service.consumeByFefo(mockItemId, 2),
       ).resolves.toBeUndefined();
 
-      expect(batch.quantity).toBe(3);
+      expect(MockModel.findOneAndUpdate).toHaveBeenCalledOnce();
       expect(mockItemService.updateStockAndCost).toHaveBeenCalled();
     });
 

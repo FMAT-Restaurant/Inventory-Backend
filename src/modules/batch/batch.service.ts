@@ -545,45 +545,89 @@ export class BatchService implements OnModuleInit {
       return;
     }
 
+    const MAX_FEFO_ATTEMPTS = 5;
     let remaining = Math.round(quantityToConsume * 1000) / 1000;
-    const batches = await this.batchModel
-      .find({ itemId })
-      .sort({ expirationDate: 1, _id: 1 })
-      .exec();
 
-    for (const batch of batches) {
-      if (remaining <= 0) {
+    for (
+      let attempt = 0;
+      attempt < MAX_FEFO_ATTEMPTS && remaining > 0;
+      attempt++
+    ) {
+      const batches = await this.batchModel
+        .find({ itemId })
+        .sort({ expirationDate: 1, _id: 1 })
+        .exec();
+
+      let hadContention = false;
+
+      for (const batch of batches) {
+        if (remaining <= 0) {
+          break;
+        }
+        const status = this.computeStatus(batch.quantity, batch.expirationDate);
+        if (status === BatchStatus.EXPIRED) {
+          continue;
+        }
+        if (
+          (status !== BatchStatus.ACTIVE &&
+            status !== BatchStatus.EXPIRES_TODAY) ||
+          batch.quantity <= 0
+        ) {
+          continue;
+        }
+
+        const take = Math.round(Math.min(remaining, batch.quantity) * 1000) / 1000;
+        const updated = await this.batchModel
+          .findOneAndUpdate(
+            { _id: batch._id, quantity: { $gte: take } },
+            { $inc: { quantity: -take } },
+            { new: true },
+          )
+          .exec();
+
+        if (!updated) {
+          // Otro consumo concurrente modificó este lote: releemos en el
+          // siguiente intento para respetar estrictamente el orden FEFO.
+          hadContention = true;
+          break;
+        }
+
+        const nextQuantity = Math.round(Math.max(0, Number(updated.quantity)) * 1000) / 1000;
+        const nextStatus = this.computeStatus(
+          nextQuantity,
+          updated.expirationDate,
+        );
+
+        if (nextStatus === BatchStatus.DEPLETED) {
+          await this.batchModel
+            .updateOne(
+              { _id: updated._id, quantity: { $lte: 0.0005 } },
+              { $set: { status: BatchStatus.DEPLETED } },
+            )
+            .exec();
+        } else if (nextStatus !== updated.status) {
+          await this.batchModel
+            .updateOne(
+              { _id: updated._id, quantity: { $gt: 0 } },
+              { $set: { status: nextStatus } },
+            )
+            .exec();
+        }
+
+        await this.recordMovementSafely({
+          batchId: String(updated._id),
+          movementType: StockMovementType.OUT,
+          quantity: take,
+          referenceId: referenceId ?? null,
+          reason,
+        });
+
+        remaining = Math.round((remaining - take) * 1000) / 1000;
+      }
+
+      if (!hadContention) {
         break;
       }
-      const status = this.computeStatus(batch.quantity, batch.expirationDate);
-      if (status === BatchStatus.EXPIRED) {
-        continue;
-      }
-      if (
-        (status !== BatchStatus.ACTIVE &&
-          status !== BatchStatus.EXPIRES_TODAY) ||
-        batch.quantity <= 0
-      ) {
-        continue;
-      }
-
-      const take = Math.min(remaining, batch.quantity);
-      const newQuantity = Math.round((batch.quantity - take) * 1000) / 1000;
-      const newStatus = this.computeStatus(newQuantity, batch.expirationDate);
-
-      batch.quantity = newQuantity;
-      batch.status = newStatus;
-      await batch.save();
-
-      await this.recordMovementSafely({
-        batchId: String(batch._id),
-        movementType: StockMovementType.OUT,
-        quantity: take,
-        referenceId: referenceId ?? null,
-        reason,
-      });
-
-      remaining = Math.round((remaining - take) * 1000) / 1000;
     }
 
     await this.syncItemStockAndCost(itemId);

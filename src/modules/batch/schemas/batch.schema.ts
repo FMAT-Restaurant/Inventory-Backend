@@ -11,6 +11,7 @@ export enum BatchStatus {
 
 @Schema({
   timestamps: true,
+  optimisticConcurrency: true,
   toJSON: { virtuals: true },
   toObject: { virtuals: true },
 })
