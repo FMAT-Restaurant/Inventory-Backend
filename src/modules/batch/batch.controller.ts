@@ -22,8 +22,11 @@ import {
 import { BatchService } from './batch.service.js';
 import { CreateBatchDto } from './dto/create-batch.dto.js';
 import { UpdateBatchDto } from './dto/update-batch.dto.js';
-import { RequiredPermissions } from '../../common/auth/auth.decorators.js';
-import { PERMISSIONS } from '../../common/auth/auth.types.js';
+import {
+  CurrentUser,
+  RequiredPermissions,
+} from '../../common/auth/auth.decorators.js';
+import { PERMISSIONS, type AuthUser } from '../../common/auth/auth.types.js';
 
 @ApiTags('batches')
 @Controller('batches')
@@ -69,9 +72,16 @@ export class BatchController {
   @ApiOperation({ summary: 'Actualizar un lote' })
   @ApiParam({ name: 'id', description: 'ID único del lote' })
   @ApiOkResponse({ description: 'Lote actualizado con éxito' })
+  @ApiBadRequestResponse({ description: 'Operación no permitida por estado del lote' })
+  @ApiConflictResponse({ description: 'El ajuste dejaría el stock por debajo del reservado' })
   @ApiNotFoundResponse({ description: 'Lote no encontrado' })
-  update(@Param('id') id: string, @Body() updateBatchDto: UpdateBatchDto) {
-    return this.batchService.update(id, updateBatchDto);
+  update(
+    @Param('id') id: string,
+    @Body() updateBatchDto: UpdateBatchDto,
+    @CurrentUser() user?: AuthUser,
+  ) {
+    const createdBy = user?.staffId ?? user?.userId ?? 'system';
+    return this.batchService.update(id, updateBatchDto, createdBy);
   }
 
   @Delete(':id')
@@ -79,8 +89,11 @@ export class BatchController {
   @ApiOperation({ summary: 'Eliminar un lote' })
   @ApiParam({ name: 'id', description: 'ID único del lote' })
   @ApiOkResponse({ description: 'Lote eliminado con éxito' })
+  @ApiBadRequestResponse({ description: 'No se puede eliminar un lote caducado, agotado o consumido' })
+  @ApiConflictResponse({ description: 'La eliminación dejaría el stock por debajo del reservado' })
   @ApiNotFoundResponse({ description: 'Lote no encontrado' })
-  remove(@Param('id') id: string) {
-    return this.batchService.remove(id);
+  remove(@Param('id') id: string, @CurrentUser() user?: AuthUser) {
+    const createdBy = user?.staffId ?? user?.userId ?? 'system';
+    return this.batchService.remove(id, createdBy);
   }
 }

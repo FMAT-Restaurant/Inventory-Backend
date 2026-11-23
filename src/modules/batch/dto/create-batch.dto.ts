@@ -5,10 +5,10 @@ import {
   IsNotEmpty,
   IsNumber,
   IsOptional,
+  IsPositive,
   IsString,
   Max,
   MaxLength,
-  Min,
 } from 'class-validator';
 import {
   AMOUNT_DECIMALS,
@@ -39,7 +39,7 @@ export class CreateBatchDto {
   @ApiProperty({ description: 'Cantidad del lote', example: 100 })
   @IsNumber()
   @MaxDecimals(QUANTITY_DECIMALS)
-  @Min(0)
+  @IsPositive()
   @Max(MAX_QUANTITY)
   quantity: number;
 
@@ -62,7 +62,7 @@ export class CreateBatchDto {
   @ApiProperty({ description: 'Costo unitario del lote', example: 150.5 })
   @IsNumber()
   @MaxDecimals(AMOUNT_DECIMALS)
-  @Min(0)
+  @IsPositive()
   @Max(MAX_AMOUNT)
   cost: number;
 }

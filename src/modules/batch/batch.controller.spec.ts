@@ -89,18 +89,36 @@ describe('BatchController', () => {
   });
 
   describe('update', () => {
-    it('debería actualizar un lote', async () => {
-      const dto = { quantity: 50 };
-      const result = await controller.update(mockBatchId, dto);
-      expect(service.update).toHaveBeenCalledWith(mockBatchId, dto);
+    it('debería actualizar un lote propagando el usuario autenticado', async () => {
+      const dto = { quantity: 50, reason: 'Conteo físico' };
+      const user = {
+        userId: 'user-1',
+        staffId: 'staff-42',
+        roles: [],
+        permissions: ['inventory:batches:write'],
+      };
+      const result = await controller.update(mockBatchId, dto, user);
+      expect(service.update).toHaveBeenCalledWith(mockBatchId, dto, 'staff-42');
       expect(result).toEqual(mockBatch);
+    });
+
+    it('debería usar system cuando no hay usuario autenticado', async () => {
+      const dto = { quantity: 50 };
+      await controller.update(mockBatchId, dto);
+      expect(service.update).toHaveBeenCalledWith(mockBatchId, dto, 'system');
     });
   });
 
   describe('remove', () => {
-    it('debería eliminar un lote', async () => {
-      const result = await controller.remove(mockBatchId);
-      expect(service.remove).toHaveBeenCalledWith(mockBatchId);
+    it('debería eliminar un lote propagando el usuario autenticado', async () => {
+      const user = {
+        userId: 'user-1',
+        staffId: 'staff-42',
+        roles: [],
+        permissions: ['inventory:batches:write'],
+      };
+      const result = await controller.remove(mockBatchId, user);
+      expect(service.remove).toHaveBeenCalledWith(mockBatchId, 'staff-42');
       expect(result).toBeUndefined();
     });
   });
