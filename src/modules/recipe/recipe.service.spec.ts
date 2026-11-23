@@ -96,7 +96,9 @@ describe('RecipeService', () => {
   async function flushAsync(): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
-  MockModel.find = vi.fn().mockReturnValue({ exec: mockExecFind });
+  const mockRecipeSort = vi.fn();
+  MockModel.find = vi.fn().mockReturnValue({ exec: mockExecFind, sort: mockRecipeSort });
+  mockRecipeSort.mockReturnValue({ exec: mockExecFind });
   MockModel.findOne = vi.fn().mockReturnValue({ exec: mockExecFindOne });
   MockModel.findById = vi.fn().mockReturnValue({ exec: mockExecFindById });
   MockModel.deleteOne = vi.fn().mockReturnValue({ exec: mockExecDeleteOne });
@@ -127,6 +129,7 @@ describe('RecipeService', () => {
   const mockItemService = {
     findOne: vi.fn(),
     findAll: vi.fn(),
+    findAllUnpaginated: vi.fn(),
     registerRemovalGuard: vi.fn(),
   };
 
@@ -144,7 +147,14 @@ describe('RecipeService', () => {
       if (id === mockItemId2) return Promise.resolve(item2);
       return Promise.reject(new NotFoundException());
     });
-    mockItemService.findAll.mockResolvedValue([item1, item2]);
+    mockItemService.findAll.mockResolvedValue({
+      items: [item1, item2],
+      total: 2,
+      page: 1,
+      limit: 20,
+      totalPages: 1,
+    });
+    mockItemService.findAllUnpaginated.mockResolvedValue([item1, item2]);
     mockPublisher.publish.mockResolvedValue(undefined);
 
     const module: TestingModule = await Test.createTestingModule({
@@ -270,9 +280,10 @@ describe('RecipeService', () => {
 
       const result = await service.findAll();
 
-      expect(result).toHaveLength(1);
-      expect(result[0].isAvailable).toBe(true);
-      expect(result[0].maxPreparablePortions).toBe(10);
+      expect(result.items).toHaveLength(1);
+      expect(result.total).toBe(1);
+      expect(result.items[0].isAvailable).toBe(true);
+      expect(result.items[0].maxPreparablePortions).toBe(10);
     });
 
     it('debería filtrar recetas por disponibilidad cuando available=true', async () => {
@@ -302,8 +313,9 @@ describe('RecipeService', () => {
 
       const result = await service.findAll({ available: true });
 
-      expect(result).toHaveLength(1);
-      expect(result[0].plateId).toBe('PLATE-001');
+      expect(result.items).toHaveLength(1);
+      expect(result.total).toBe(1);
+      expect(result.items[0].plateId).toBe('PLATE-001');
     });
   });
 

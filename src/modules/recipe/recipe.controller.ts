@@ -72,13 +72,20 @@ export class RecipeController {
   @RequiredPermissions(PERMISSIONS.RECIPES_READ)
   @ApiOperation({
     summary:
-      'Obtener el listado de recetas con cálculo de disponibilidad y costo en tiempo real',
+      'Obtener el listado paginado de recetas con cálculo de disponibilidad y costo en tiempo real',
   })
   @ApiOkResponse({
-    description: 'Lista de recetas obtenida con éxito',
-    type: [RecipeResponseDto],
+    description: 'Lista paginada de recetas obtenida con éxito',
   })
-  findAll(@Query() query: QueryRecipesDto): Promise<RecipeResponseDto[]> {
+  findAll(
+    @Query() query: QueryRecipesDto,
+  ): Promise<{
+    items: RecipeResponseDto[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
     return this.recipeService.findAll(query);
   }
 

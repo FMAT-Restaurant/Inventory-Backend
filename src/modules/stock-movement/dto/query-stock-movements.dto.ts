@@ -1,17 +1,9 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import {
-  IsDateString,
-  IsEnum,
-  IsInt,
-  IsMongoId,
-  IsOptional,
-  IsString,
-  Min,
-} from 'class-validator';
+import { IsDateString, IsEnum, IsMongoId, IsOptional, IsString } from 'class-validator';
 import { StockMovementType } from '../schemas/stock-movement.schema.js';
+import { PaginationQueryDto } from '../../../common/pagination/index.js';
 
-export class QueryStockMovementsDto {
+export class QueryStockMovementsDto extends PaginationQueryDto {
   @ApiPropertyOptional({ description: 'Filtrar por ID de lote (ObjectId)' })
   @IsMongoId()
   @IsOptional()
@@ -47,11 +39,4 @@ export class QueryStockMovementsDto {
   @IsDateString()
   @IsOptional()
   to?: string;
-
-  @ApiPropertyOptional({ description: 'Máximo de resultados a devolver' })
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @IsOptional()
-  limit?: number;
 }

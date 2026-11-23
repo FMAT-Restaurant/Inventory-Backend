@@ -45,7 +45,10 @@ describe('ReservationService', () => {
   };
   let publisher: { publish: ReturnType<typeof vi.fn> };
   let recipeModel: { findOne: ReturnType<typeof vi.fn> };
-  let batchService: { consumeByFefo: ReturnType<typeof vi.fn> };
+  let batchService: {
+    consumeByFefo: ReturnType<typeof vi.fn>;
+    previewFefoAllocation: ReturnType<typeof vi.fn>;
+  };
   let stockMovementService: { record: ReturnType<typeof vi.fn> };
   let cache: ReservationCacheService;
 
@@ -83,7 +86,10 @@ describe('ReservationService', () => {
     };
     publisher = { publish: vi.fn().mockResolvedValue(undefined) };
     recipeModel = { findOne: vi.fn().mockReturnValue({ exec: recipeFindExec }) };
-    batchService = { consumeByFefo: vi.fn().mockResolvedValue(undefined) };
+    batchService = {
+      consumeByFefo: vi.fn().mockResolvedValue(undefined),
+      previewFefoAllocation: vi.fn().mockResolvedValue([]),
+    };
     stockMovementService = { record: vi.fn() };
     cache = new ReservationCacheService();
 
@@ -1122,16 +1128,53 @@ describe('ReservationService', () => {
         items: [{ itemId: new Types.ObjectId(ITEM_A), quantity: 4 }],
         correlationId: 'C-1',
       });
+      batchService.previewFefoAllocation.mockResolvedValue([
+        {
+          batchId: 'batch-1',
+          batchNumber: 'LOTE-1',
+          expirationDate: '2099-01-01T00:00:00.000Z',
+          quantity: 3,
+        },
+        {
+          batchId: 'batch-2',
+          batchNumber: 'LOTE-2',
+          expirationDate: '2099-02-01T00:00:00.000Z',
+          quantity: 1,
+        },
+      ]);
 
       await service.reserve({
         orderId: 'O-1',
         items: [{ plateId: PLATE, offerId: 'offer-1', quantity: 2 }],
       });
 
+      expect(batchService.previewFefoAllocation).toHaveBeenCalledWith(
+        ITEM_A,
+        4,
+      );
       const payload = expect.objectContaining({
         orderId: 'O-1',
         correlationId: 'C-1',
-        reservations: [{ ingredientId: ITEM_A, reservedQuantity: 4 }],
+        reservations: [
+          {
+            ingredientId: ITEM_A,
+            reservedQuantity: 4,
+            batches: [
+              {
+                batchId: 'batch-1',
+                batchNumber: 'LOTE-1',
+                expirationDate: '2099-01-01T00:00:00.000Z',
+                quantity: 3,
+              },
+              {
+                batchId: 'batch-2',
+                batchNumber: 'LOTE-2',
+                expirationDate: '2099-02-01T00:00:00.000Z',
+                quantity: 1,
+              },
+            ],
+          },
+        ],
       });
       for (const exchange of new Set([INVENTORY_EXCHANGE, INTEGRATION_EXCHANGE])) {
         expect(publisher.publish).toHaveBeenCalledWith(
@@ -1145,6 +1188,38 @@ describe('ReservationService', () => {
           payload,
         );
       }
+    });
+
+    it('publica la reserva sin el campo batches si los lotes no se pueden resolver', async () => {
+      findOneExec.mockResolvedValue(null);
+      recipeFindExec.mockResolvedValue(recipeWith(ITEM_A));
+      itemService.findOne.mockResolvedValue(item(ITEM_A, 20));
+      itemService.reserveStock.mockResolvedValue(item(ITEM_A, 20, 4));
+      save.mockResolvedValue({
+        orderId: 'O-1',
+        status: ReservationStatus.PENDING,
+        items: [{ itemId: new Types.ObjectId(ITEM_A), quantity: 4 }],
+        correlationId: 'C-1',
+      });
+      batchService.previewFefoAllocation.mockRejectedValue(
+        new Error('lotes inaccesibles'),
+      );
+
+      await service.reserve({
+        orderId: 'O-1',
+        items: [{ plateId: PLATE, offerId: 'offer-1', quantity: 2 }],
+      });
+
+      expect(publisher.publish).toHaveBeenCalledWith(
+        INVENTORY_EXCHANGE,
+        InventoryRoutingKeys.StockReserved,
+        expect.objectContaining({
+          orderId: 'O-1',
+          reservations: [
+            { ingredientId: ITEM_A, reservedQuantity: 4 },
+          ],
+        }),
+      );
     });
 
     it('guarda en la reserva el platillo y la oferta que la originaron', async () => {

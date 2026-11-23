@@ -45,9 +45,9 @@ export class ItemsController {
   @ApiOperation({
     summary: 'Obtener la lista de items',
     description:
-      'Permite buscar por nombre usando el parámetro q (coincidencia parcial, sin distinguir mayúsculas).',
+      'Permite buscar por nombre usando el parámetro q (coincidencia parcial, sin distinguir mayúsculas) y paginar con page/limit.',
   })
-  @ApiOkResponse({ description: 'Lista de items obtenida con éxito' })
+  @ApiOkResponse({ description: 'Lista paginada de items obtenida con éxito' })
   findAll(@Query() query: QueryItemsDto) {
     return this.itemsService.findAll(query);
   }

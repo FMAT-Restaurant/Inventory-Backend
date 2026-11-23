@@ -31,11 +31,20 @@ describe('ItemService', () => {
   const mockSave = vi.fn();
   const mockSupplierService = { assertAssignable: vi.fn() };
 
+  const mockExecCount = vi.fn();
+  const mockSort = vi.fn();
+  const mockSkip = vi.fn();
+  const mockLimit = vi.fn();
+
   function MockModel(this: any, dto: any) {
     Object.assign(this, dto);
     this.save = mockSave;
   }
-  MockModel.find = vi.fn().mockReturnValue({ exec: mockExecFind });
+  MockModel.find = vi.fn().mockReturnValue({ exec: mockExecFind, sort: mockSort });
+  mockSort.mockReturnValue({ skip: mockSkip, exec: mockExecFind });
+  mockSkip.mockReturnValue({ limit: mockLimit });
+  mockLimit.mockReturnValue({ exec: mockExecFind });
+  MockModel.countDocuments = vi.fn().mockReturnValue({ exec: mockExecCount });
   MockModel.findOne = vi.fn().mockReturnValue({ exec: mockExecFindOne });
   MockModel.findByIdAndUpdate = vi
     .fn()
@@ -58,6 +67,13 @@ describe('ItemService', () => {
     vi.clearAllMocks();
     mockSave.mockResolvedValue({ _id: VALID_ID, ...createDto });
     mockSupplierService.assertAssignable.mockResolvedValue(undefined);
+    mockExecCount.mockResolvedValue(0);
+    mockExecFind.mockResolvedValue([]);
+    mockSort.mockReturnValue({ skip: mockSkip, exec: mockExecFind });
+    mockSkip.mockReturnValue({ limit: mockLimit });
+    mockLimit.mockReturnValue({ exec: mockExecFind });
+    MockModel.find.mockReturnValue({ exec: mockExecFind, sort: mockSort });
+    MockModel.countDocuments.mockReturnValue({ exec: mockExecCount });
     emittedEvents = [];
 
     emitter = new ItemChangeEmitter();
@@ -91,39 +107,52 @@ describe('ItemService', () => {
   });
 
   describe('findAll', () => {
-    it('debería retornar una lista de items', async () => {
+    it('debería retornar una lista paginada de items', async () => {
       const mockItems = [
         { _id: VALID_ID, name: 'Tomate', totalStock: 10, unit: 'kg' },
         { _id: '507f1f77bcf86cd799439012', name: 'Cebolla', totalStock: 5 },
       ];
+      mockExecCount.mockResolvedValue(2);
       mockExecFind.mockResolvedValue(mockItems);
 
       const result = await service.findAll();
 
-      expect(result).toEqual(mockItems);
+      expect(result).toEqual({
+        items: mockItems,
+        total: 2,
+        page: 1,
+        limit: 20,
+        totalPages: 1,
+      });
     });
 
     it('debería filtrar solo los items activos', async () => {
+      mockExecCount.mockResolvedValue(0);
       mockExecFind.mockResolvedValue([]);
 
       await service.findAll();
 
+      expect(MockModel.countDocuments).toHaveBeenCalledWith(ACTIVE_FILTER);
       expect(MockModel.find).toHaveBeenCalledWith(ACTIVE_FILTER);
     });
 
     it('debería buscar por nombre sin distinguir mayúsculas', async () => {
+      mockExecCount.mockResolvedValue(0);
       mockExecFind.mockResolvedValue([]);
 
       await service.findAll({ q: 'TOMATE' });
 
-      expect(MockModel.find).toHaveBeenCalledWith({
+      const filter = {
         ...ACTIVE_FILTER,
         name: { $regex: 'TOMATE', $options: 'i' },
-      });
+      };
+      expect(MockModel.countDocuments).toHaveBeenCalledWith(filter);
+      expect(MockModel.find).toHaveBeenCalledWith(filter);
     });
 
     it('debería usar una coincidencia parcial del nombre', async () => {
       const matches = [{ _id: VALID_ID, name: 'Tomate perita' }];
+      mockExecCount.mockResolvedValue(1);
       mockExecFind.mockResolvedValue(matches);
 
       const result = await service.findAll({ q: 'tom' });
@@ -132,10 +161,11 @@ describe('ItemService', () => {
         ...ACTIVE_FILTER,
         name: { $regex: 'tom', $options: 'i' },
       });
-      expect(result).toEqual(matches);
+      expect(result.items).toEqual(matches);
     });
 
     it('debería recortar los espacios alrededor del término de búsqueda', async () => {
+      mockExecCount.mockResolvedValue(0);
       mockExecFind.mockResolvedValue([]);
 
       await service.findAll({ q: '  tomate  ' });
@@ -147,6 +177,7 @@ describe('ItemService', () => {
     });
 
     it('debería escapar los caracteres especiales de regex', async () => {
+      mockExecCount.mockResolvedValue(0);
       mockExecFind.mockResolvedValue([]);
 
       await service.findAll({ q: 'tom.ate (perita)' });
@@ -158,6 +189,7 @@ describe('ItemService', () => {
     });
 
     it('debería ignorar un término vacío o compuesto solo de espacios', async () => {
+      mockExecCount.mockResolvedValue(0);
       mockExecFind.mockResolvedValue([]);
 
       await service.findAll({ q: '   ' });
