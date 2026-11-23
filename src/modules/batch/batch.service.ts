@@ -396,11 +396,21 @@ export class BatchService implements OnModuleInit {
 
     const quantityDelta = Number(nextQuantity) - Number(currentBatch.quantity);
     if (quantityDelta !== 0) {
+      const isExpiredWriteOff =
+        currentStatus === BatchStatus.EXPIRED && Number(nextQuantity) === 0;
       await this.recordMovementSafely({
         batchId: id,
-        movementType: StockMovementType.ADJUSTMENT,
-        quantity: quantityDelta,
-        reason: reason ?? 'Ajuste manual de lote',
+        movementType: isExpiredWriteOff
+          ? StockMovementType.WASTE
+          : StockMovementType.ADJUSTMENT,
+        quantity: isExpiredWriteOff
+          ? Number(currentBatch.quantity)
+          : quantityDelta,
+        reason:
+          reason ??
+          (isExpiredWriteOff
+            ? 'Baja por caducidad de lote'
+            : 'Ajuste manual de lote'),
         createdBy,
       });
     }

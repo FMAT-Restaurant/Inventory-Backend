@@ -350,6 +350,14 @@ describe('BatchService', () => {
       await expect(
         service.update(mockBatchId, { quantity: 0, reason: 'Baja por merma' }),
       ).resolves.toBeDefined();
+      expect(mockStockMovementService.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          batchId: mockBatchId,
+          movementType: StockMovementType.WASTE,
+          quantity: expiredBatch.quantity,
+          reason: 'Baja por merma',
+        }),
+      );
     });
 
     it('debería lanzar ConflictException si reducir el lote deja menos stock del reservado', async () => {
