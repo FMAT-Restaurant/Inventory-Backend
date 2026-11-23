@@ -12,6 +12,11 @@ import { Supplier } from './schemas/supplier.schema.js';
 import { CreateSupplierDto } from './dto/create-supplier.dto.js';
 import { UpdateSupplierDto } from './dto/update-supplier.dto.js';
 import { QuerySuppliersDto } from './dto/query-suppliers.dto.js';
+import {
+  buildPaginatedResult,
+  normalizePagination,
+  PaginatedResult,
+} from '../../common/pagination/index.js';
 
 const DUPLICATE_KEY_ERROR_CODE = 11000;
 
@@ -116,9 +121,21 @@ export class SupplierService implements OnModuleInit {
    * los dados de baja, para poder mostrar el nombre de los que siguen
    * asignados a lotes o items.
    */
-  async findAll(query: QuerySuppliersDto = {}): Promise<Supplier[]> {
+  async findAll(
+    query: QuerySuppliersDto = {},
+  ): Promise<PaginatedResult<Supplier>> {
     const filter = query.includeInactive ? {} : ACTIVE_SUPPLIER_FILTER;
-    return this.supplierModel.find(filter).exec();
+    const { page, limit } = normalizePagination(query.page, query.limit);
+    const [total, items] = await Promise.all([
+      this.supplierModel.countDocuments(filter).exec(),
+      this.supplierModel
+        .find(filter)
+        .sort({ _id: 1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .exec(),
+    ]);
+    return buildPaginatedResult(items, total, page, limit);
   }
 
   /**

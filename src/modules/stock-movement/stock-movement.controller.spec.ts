@@ -19,9 +19,16 @@ describe('StockMovementController', () => {
       createdBy: 'system',
     },
   ];
+  const mockPaginatedMovements = {
+    items: mockMovements,
+    total: 1,
+    page: 1,
+    limit: 20,
+    totalPages: 1,
+  };
 
   const mockStockMovementService = {
-    findAll: vi.fn().mockResolvedValue(mockMovements),
+    findAll: vi.fn().mockResolvedValue(mockPaginatedMovements),
   };
 
   beforeEach(async () => {
@@ -46,11 +53,11 @@ describe('StockMovementController', () => {
   });
 
   it('debería consultar movimientos con los filtros recibidos', async () => {
-    const query = { movementType: StockMovementType.OUT, limit: 5 };
+    const query = { movementType: StockMovementType.OUT, limit: 5 } as any;
 
     const result = await controller.findAll(query);
 
     expect(service.findAll).toHaveBeenCalledWith(query);
-    expect(result).toEqual(mockMovements);
+    expect(result).toEqual(mockPaginatedMovements);
   });
 });

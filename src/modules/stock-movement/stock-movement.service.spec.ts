@@ -13,9 +13,12 @@ describe('StockMovementService', () => {
 
   const mockSave = vi.fn();
   const mockExec = vi.fn();
+  const mockExecCount = vi.fn();
   const mockLimit = vi.fn();
+  const mockSkip = vi.fn();
   const mockSort = vi.fn();
   const mockFind = vi.fn();
+  const mockCountDocuments = vi.fn();
 
   const mockBatchId = '507f1f77bcf86cd799439011';
 
@@ -27,13 +30,17 @@ describe('StockMovementService', () => {
     this.save = () => mockSave(this);
   }
   MockModel.find = mockFind;
+  MockModel.countDocuments = mockCountDocuments;
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    mockSort.mockReturnValue({ exec: mockExec, limit: mockLimit });
+    mockSort.mockReturnValue({ skip: mockSkip });
+    mockSkip.mockReturnValue({ limit: mockLimit });
     mockLimit.mockReturnValue({ exec: mockExec });
     mockFind.mockReturnValue({ sort: mockSort });
+    mockCountDocuments.mockReturnValue({ exec: mockExecCount });
     mockExec.mockResolvedValue([]);
+    mockExecCount.mockResolvedValue(0);
     mockSave.mockImplementation(async (doc: Record<string, unknown>) => ({
       _id: 'mov-1',
       ...doc,
@@ -129,14 +136,30 @@ describe('StockMovementService', () => {
   });
 
   describe('findAll', () => {
-    it('consulta ordenando por createdAt descendente', async () => {
-      await service.findAll();
+    it('consulta paginado ordenando por createdAt descendente', async () => {
+      mockExecCount.mockResolvedValue(0);
+      mockExec.mockResolvedValue([]);
 
+      const result = await service.findAll();
+
+      expect(mockCountDocuments).toHaveBeenCalledWith({});
       expect(mockFind).toHaveBeenCalledWith({});
-      expect(mockSort).toHaveBeenCalledWith({ createdAt: -1 });
+      expect(mockSort).toHaveBeenCalledWith({ createdAt: -1, _id: -1 });
+      expect(mockSkip).toHaveBeenCalledWith(0);
+      expect(mockLimit).toHaveBeenCalledWith(20);
+      expect(result).toEqual({
+        items: [],
+        total: 0,
+        page: 1,
+        limit: 20,
+        totalPages: 1,
+      });
     });
 
     it('aplica filtros de lote, tipo, referencia y fechas', async () => {
+      mockExecCount.mockResolvedValue(0);
+      mockExec.mockResolvedValue([]);
+
       await service.findAll({
         batchId: mockBatchId,
         movementType: StockMovementType.OUT,
@@ -157,16 +180,27 @@ describe('StockMovementService', () => {
       );
     });
 
-    it('retorna [] si el batchId no es un ObjectId válido', async () => {
+    it('retorna resultado vacío si el batchId no es un ObjectId válido', async () => {
       const result = await service.findAll({ batchId: 'invalido' });
 
-      expect(result).toEqual([]);
+      expect(result).toEqual({
+        items: [],
+        total: 0,
+        page: 1,
+        limit: 20,
+        totalPages: 1,
+      });
       expect(mockFind).not.toHaveBeenCalled();
+      expect(mockCountDocuments).not.toHaveBeenCalled();
     });
 
-    it('aplica el límite cuando se recibe', async () => {
-      await service.findAll({ limit: 10 });
+    it('aplica la paginación cuando se recibe page/limit', async () => {
+      mockExecCount.mockResolvedValue(0);
+      mockExec.mockResolvedValue([]);
 
+      await service.findAll({ page: 2, limit: 10 });
+
+      expect(mockSkip).toHaveBeenCalledWith(10);
       expect(mockLimit).toHaveBeenCalledWith(10);
     });
   });

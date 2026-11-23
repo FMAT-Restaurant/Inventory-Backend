@@ -29,9 +29,17 @@ describe('RecipeController', () => {
     ],
   };
 
+  const mockPaginatedRecipes = {
+    items: [mockResponseDto],
+    total: 1,
+    page: 1,
+    limit: 20,
+    totalPages: 1,
+  };
+
   const mockRecipeService = {
     registerOrUpdate: vi.fn(),
-    findAll: vi.fn().mockResolvedValue([mockResponseDto]),
+    findAll: vi.fn().mockResolvedValue(mockPaginatedRecipes),
     findOne: vi.fn().mockResolvedValue(mockResponseDto),
     update: vi.fn().mockResolvedValue(mockResponseDto),
     remove: vi.fn().mockResolvedValue(undefined),
@@ -102,11 +110,11 @@ describe('RecipeController', () => {
   });
 
   describe('findAll', () => {
-    it('debería retornar listado de recetas', async () => {
+    it('debería retornar listado paginado de recetas', async () => {
       const result = await controller.findAll({});
 
       expect(service.findAll).toHaveBeenCalledWith({});
-      expect(result).toEqual([mockResponseDto]);
+      expect(result).toEqual(mockPaginatedRecipes);
     });
   });
 

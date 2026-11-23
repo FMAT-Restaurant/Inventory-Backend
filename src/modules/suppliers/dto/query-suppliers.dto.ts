@@ -1,8 +1,9 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsBoolean, IsOptional } from 'class-validator';
+import { PaginationQueryDto } from '../../../common/pagination/index.js';
 
-export class QuerySuppliersDto {
+export class QuerySuppliersDto extends PaginationQueryDto {
   @ApiPropertyOptional({
     description:
       'Incluir también los proveedores dados de baja (por defecto solo activos)',

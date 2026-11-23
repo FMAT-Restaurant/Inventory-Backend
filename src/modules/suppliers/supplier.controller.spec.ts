@@ -16,9 +16,17 @@ describe('SuppliersController', () => {
     address: 'Av. Reforma 123, CDMX',
   };
 
+  const mockPaginatedSuppliers = {
+    items: [mockSupplier],
+    total: 1,
+    page: 1,
+    limit: 20,
+    totalPages: 1,
+  };
+
   const mockSupplierService = {
     create: vi.fn().mockResolvedValue(mockSupplier),
-    findAll: vi.fn().mockResolvedValue([mockSupplier]),
+    findAll: vi.fn().mockResolvedValue(mockPaginatedSuppliers),
     findOne: vi.fn().mockResolvedValue(mockSupplier),
     update: vi.fn().mockResolvedValue(mockSupplier),
     remove: vi.fn().mockResolvedValue(undefined),
@@ -46,10 +54,10 @@ describe('SuppliersController', () => {
   });
 
   describe('findAll', () => {
-    it('debería retornar un array de proveedores', async () => {
+    it('debería retornar un listado paginado de proveedores', async () => {
       const result = await controller.findAll({});
       expect(service.findAll).toHaveBeenCalledWith({});
-      expect(result).toEqual([mockSupplier]);
+      expect(result).toEqual(mockPaginatedSuppliers);
     });
   });
 

@@ -18,6 +18,10 @@ describe('SupplierService', () => {
   const mockExecFindOne = vi.fn();
   const mockExecFindById = vi.fn();
   const mockExecFindOneAndUpdate = vi.fn();
+  const mockExecCount = vi.fn();
+  const mockSort = vi.fn();
+  const mockSkip = vi.fn();
+  const mockLimit = vi.fn();
   const mockSave = vi.fn();
 
   const mockSupplierId = '507f1f77bcf86cd799439011';
@@ -39,7 +43,11 @@ describe('SupplierService', () => {
     Object.assign(this, dto);
     this.save = mockSave;
   }
-  MockModel.find = vi.fn().mockReturnValue({ exec: mockExecFind });
+  MockModel.find = vi.fn().mockReturnValue({ exec: mockExecFind, sort: mockSort });
+  mockSort.mockReturnValue({ skip: mockSkip, exec: mockExecFind });
+  mockSkip.mockReturnValue({ limit: mockLimit });
+  mockLimit.mockReturnValue({ exec: mockExecFind });
+  MockModel.countDocuments = vi.fn().mockReturnValue({ exec: mockExecCount });
   MockModel.findOne = vi.fn().mockReturnValue({ exec: mockExecFindOne });
   MockModel.findById = vi.fn().mockReturnValue({ exec: mockExecFindById });
   MockModel.findOneAndUpdate = vi
@@ -50,6 +58,13 @@ describe('SupplierService', () => {
     vi.clearAllMocks();
     mockSave.mockResolvedValue({});
     mockExecFindOne.mockResolvedValue(null);
+    mockExecFind.mockResolvedValue([]);
+    mockExecCount.mockResolvedValue(0);
+    mockSort.mockReturnValue({ skip: mockSkip, exec: mockExecFind });
+    mockSkip.mockReturnValue({ limit: mockLimit });
+    mockLimit.mockReturnValue({ exec: mockExecFind });
+    MockModel.find.mockReturnValue({ exec: mockExecFind, sort: mockSort });
+    MockModel.countDocuments.mockReturnValue({ exec: mockExecCount });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -69,18 +84,28 @@ describe('SupplierService', () => {
   });
 
   describe('findAll', () => {
-    it('debería retornar una lista de proveedores', async () => {
+    it('debería retornar una lista paginada de proveedores', async () => {
+      mockExecCount.mockResolvedValue(1);
       mockExecFind.mockResolvedValue([mockSupplier]);
 
       const result = await service.findAll();
+      expect(MockModel.countDocuments).toHaveBeenCalledWith(ACTIVE_FILTER);
       expect(MockModel.find).toHaveBeenCalledWith(ACTIVE_FILTER);
-      expect(result).toEqual([mockSupplier]);
+      expect(result).toEqual({
+        items: [mockSupplier],
+        total: 1,
+        page: 1,
+        limit: 20,
+        totalPages: 1,
+      });
     });
 
     it('debería incluir los dados de baja cuando se pide includeInactive', async () => {
+      mockExecCount.mockResolvedValue(1);
       mockExecFind.mockResolvedValue([mockSupplier]);
 
       await service.findAll({ includeInactive: true });
+      expect(MockModel.countDocuments).toHaveBeenCalledWith({});
       expect(MockModel.find).toHaveBeenCalledWith({});
     });
   });
