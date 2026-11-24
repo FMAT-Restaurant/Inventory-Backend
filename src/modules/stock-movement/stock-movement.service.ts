@@ -6,6 +6,11 @@ import {
   StockMovement,
   StockMovementType,
 } from './schemas/stock-movement.schema.js';
+import {
+  buildPaginatedResult,
+  normalizePagination,
+  PaginatedResult,
+} from '../../common/pagination/index.js';
 
 export interface RecordStockMovementInput {
   batchId: string | Types.ObjectId;
@@ -79,12 +84,14 @@ export class StockMovementService {
     return movements;
   }
 
-  async findAll(query: QueryStockMovementsDto = {}): Promise<StockMovement[]> {
+  private buildFilter(
+    query: QueryStockMovementsDto = {},
+  ): FilterQuery<StockMovement> | null {
     const filter: FilterQuery<StockMovement> = {};
 
     if (query.batchId) {
       if (!isValidObjectId(query.batchId)) {
-        return [];
+        return null;
       }
       filter.batchId = new Types.ObjectId(query.batchId);
     }
@@ -106,13 +113,42 @@ export class StockMovementService {
       filter.createdAt = createdAt;
     }
 
-    const request = this.stockMovementModel
-      .find(filter)
-      .sort({ createdAt: -1 });
-    if (query.limit) {
-      request.limit(query.limit);
+    return filter;
+  }
+
+  async findAll(
+    query: QueryStockMovementsDto = {},
+  ): Promise<PaginatedResult<StockMovement>> {
+    const { page, limit } = normalizePagination(query.page, query.limit);
+    const filter = this.buildFilter(query);
+    if (filter === null) {
+      return buildPaginatedResult([], 0, page, limit);
     }
 
-    return request.exec();
+    const [total, items] = await Promise.all([
+      this.stockMovementModel.countDocuments(filter).exec(),
+      this.stockMovementModel
+        .find(filter)
+        .sort({ createdAt: -1, _id: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .exec(),
+    ]);
+
+    return buildPaginatedResult(items, total, page, limit);
+  }
+
+  async findAllUnpaginated(
+    query: QueryStockMovementsDto = {},
+  ): Promise<StockMovement[]> {
+    const filter = this.buildFilter(query);
+    if (filter === null) {
+      return [];
+    }
+
+    return this.stockMovementModel
+      .find(filter)
+      .sort({ createdAt: -1, _id: -1 })
+      .exec();
   }
 }

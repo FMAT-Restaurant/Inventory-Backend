@@ -23,6 +23,7 @@ describe('BatchService', () => {
   const mockExecFindOneAndUpdate = vi.fn();
   const mockExecDeleteOne = vi.fn();
   const mockExecUpdateOne = vi.fn();
+  const mockExecCount = vi.fn();
   const mockSave = vi.fn();
 
   const mockBatchId = '507f1f77bcf86cd799439011';
@@ -57,10 +58,15 @@ describe('BatchService', () => {
   }
   const findChain = {
     sort: vi.fn(),
+    skip: vi.fn(),
+    limit: vi.fn(),
     exec: mockExecFind,
   };
   findChain.sort.mockReturnValue(findChain);
+  findChain.skip.mockReturnValue(findChain);
+  findChain.limit.mockReturnValue(findChain);
   MockModel.find = vi.fn().mockReturnValue(findChain);
+  MockModel.countDocuments = vi.fn().mockReturnValue({ exec: mockExecCount });
   MockModel.findById = vi.fn().mockReturnValue({ exec: mockExecFindById });
   MockModel.findByIdAndUpdate = vi
     .fn()
@@ -87,6 +93,12 @@ describe('BatchService', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mockExecFind.mockResolvedValue([mockBatch]);
+    mockExecCount.mockResolvedValue(1);
+    findChain.sort.mockReturnValue(findChain);
+    findChain.skip.mockReturnValue(findChain);
+    findChain.limit.mockReturnValue(findChain);
+    MockModel.find.mockReturnValue(findChain);
+    MockModel.countDocuments.mockReturnValue({ exec: mockExecCount });
     mockSave.mockImplementation(async (doc: Record<string, unknown>) => ({
       _id: mockBatchId,
       ...doc,
@@ -158,22 +170,37 @@ describe('BatchService', () => {
   });
 
   describe('findAll', () => {
-    it('debería retornar una lista de lotes', async () => {
+    it('debería retornar una lista paginada de lotes', async () => {
       const result = await service.findAll();
-      expect(MockModel.find).toHaveBeenCalledWith();
-      expect(result).toEqual([mockBatch]);
+      expect(MockModel.countDocuments).toHaveBeenCalledWith({});
+      expect(MockModel.find).toHaveBeenCalledWith({});
+      expect(result).toEqual({
+        items: [mockBatch],
+        total: 1,
+        page: 1,
+        limit: 20,
+        totalPages: 1,
+      });
     });
 
     it('debería filtrar por itemId cuando es válido', async () => {
-      const result = await service.findAll(mockItemId);
+      const result = await service.findAll({ itemId: mockItemId });
+      expect(MockModel.countDocuments).toHaveBeenCalledWith({ itemId: mockItemId });
       expect(MockModel.find).toHaveBeenCalledWith({ itemId: mockItemId });
-      expect(result).toEqual([mockBatch]);
+      expect(result.items).toEqual([mockBatch]);
     });
 
-    it('debería retornar arreglo vacío si itemId no es ObjectId válido', async () => {
-      const result = await service.findAll('invalido');
+    it('debería retornar resultado vacío si itemId no es ObjectId válido', async () => {
+      const result = await service.findAll({ itemId: 'invalido' });
       expect(MockModel.find).not.toHaveBeenCalled();
-      expect(result).toEqual([]);
+      expect(MockModel.countDocuments).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        items: [],
+        total: 0,
+        page: 1,
+        limit: 20,
+        totalPages: 1,
+      });
     });
   });
 
@@ -832,6 +859,145 @@ describe('BatchService', () => {
       }).syncItemStockAndCost('invalido');
 
       expect(MockModel.find).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('previewFefoAllocation', () => {
+    function batchDoc(overrides: Record<string, unknown> = {}) {
+      return {
+        _id: `batch-${Math.random().toString(16).slice(2)}`,
+        batchNumber: 'LOTE-X',
+        itemId: mockItemId,
+        quantity: 1,
+        cost: 10,
+        expirationDate: new Date('2099-01-01'),
+        status: BatchStatus.ACTIVE,
+        save: vi.fn().mockResolvedValue(undefined),
+        ...overrides,
+      };
+    }
+
+    it('ignora itemId o cantidades inválidas sin consultar lotes', async () => {
+      await expect(
+        service.previewFefoAllocation('invalido', 5),
+      ).resolves.toEqual([]);
+      await expect(service.previewFefoAllocation(mockItemId, 0)).resolves.toEqual(
+        [],
+      );
+      await expect(
+        service.previewFefoAllocation(mockItemId, Number.NaN),
+      ).resolves.toEqual([]);
+
+      expect(MockModel.find).not.toHaveBeenCalled();
+    });
+
+    it('divide entre lotes en orden FEFO sin mutarlos ni registrar movimientos', async () => {
+      const first = batchDoc({
+        _id: 'first',
+        batchNumber: 'LOTE-1',
+        quantity: 3,
+        expirationDate: new Date('2099-01-01'),
+      });
+      const second = batchDoc({
+        _id: 'second',
+        batchNumber: 'LOTE-2',
+        quantity: 5,
+        expirationDate: new Date('2099-02-01'),
+      });
+      mockExecFind.mockResolvedValueOnce([first, second]);
+
+      await expect(
+        service.previewFefoAllocation(mockItemId, 4),
+      ).resolves.toEqual([
+        {
+          batchId: 'first',
+          batchNumber: 'LOTE-1',
+          expirationDate: '2099-01-01T00:00:00.000Z',
+          quantity: 3,
+        },
+        {
+          batchId: 'second',
+          batchNumber: 'LOTE-2',
+          expirationDate: '2099-02-01T00:00:00.000Z',
+          quantity: 1,
+        },
+      ]);
+
+      expect(MockModel.find).toHaveBeenCalledWith({ itemId: mockItemId });
+      expect(findChain.sort).toHaveBeenCalledWith({
+        expirationDate: 1,
+        _id: 1,
+      });
+      expect(first.quantity).toBe(3);
+      expect(second.quantity).toBe(5);
+      expect(first.save).not.toHaveBeenCalled();
+      expect(second.save).not.toHaveBeenCalled();
+      expect(mockStockMovementService.record).not.toHaveBeenCalled();
+      expect(mockItemService.updateStockAndCost).not.toHaveBeenCalled();
+    });
+
+    it('omite lotes expirados o agotados', async () => {
+      const expired = batchDoc({
+        _id: 'expired',
+        quantity: 5,
+        expirationDate: new Date('2020-01-01'),
+      });
+      const depleted = batchDoc({ _id: 'depleted', quantity: 0 });
+      const usable = batchDoc({
+        _id: 'usable',
+        batchNumber: 'LOTE-OK',
+        quantity: 4,
+      });
+      mockExecFind.mockResolvedValueOnce([expired, depleted, usable]);
+
+      await expect(
+        service.previewFefoAllocation(mockItemId, 2),
+      ).resolves.toEqual([
+        {
+          batchId: 'usable',
+          batchNumber: 'LOTE-OK',
+          expirationDate: '2099-01-01T00:00:00.000Z',
+          quantity: 2,
+        },
+      ]);
+    });
+
+    it('incluye lotes que vencen hoy', async () => {
+      const today = new Date();
+      const expiringToday = batchDoc({
+        _id: 'today',
+        batchNumber: 'LOTE-HOY',
+        quantity: 2,
+        expirationDate: today,
+      });
+      mockExecFind.mockResolvedValueOnce([expiringToday]);
+
+      await expect(
+        service.previewFefoAllocation(mockItemId, 1),
+      ).resolves.toEqual([
+        {
+          batchId: 'today',
+          batchNumber: 'LOTE-HOY',
+          expirationDate: today.toISOString(),
+          quantity: 1,
+        },
+      ]);
+    });
+
+    it('devuelve solo lo alcanzable cuando los lotes no cubren la cantidad', async () => {
+      const only = batchDoc({ _id: 'only', quantity: 2 });
+      mockExecFind.mockResolvedValueOnce([only]);
+
+      await expect(
+        service.previewFefoAllocation(mockItemId, 10),
+      ).resolves.toEqual([
+        {
+          batchId: 'only',
+          batchNumber: 'LOTE-X',
+          expirationDate: '2099-01-01T00:00:00.000Z',
+          quantity: 2,
+        },
+      ]);
     });
   });
 

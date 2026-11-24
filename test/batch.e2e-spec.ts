@@ -112,9 +112,12 @@ describe('BatchController (e2e)', () => {
       const movementsRes = await request(app.getHttpServer())
         .get(`/movements?batchId=${response.body._id}`)
         .expect(200);
-      expect(movementsRes.body).toHaveLength(1);
-      expect(movementsRes.body[0].movementType).toBe(StockMovementType.IN);
-      expect(movementsRes.body[0].quantity).toBe(12);
+      const movements = Array.isArray(movementsRes.body)
+        ? movementsRes.body
+        : movementsRes.body.items;
+      expect(movements).toHaveLength(1);
+      expect(movements[0].movementType).toBe(StockMovementType.IN);
+      expect(movements[0].quantity).toBe(12);
     });
 
     it('rechaza cost = 0 y quantity = 0 con 400', async () => {
@@ -241,11 +244,12 @@ describe('BatchController (e2e)', () => {
           `/movements?batchId=${created.body._id}&movementType=${StockMovementType.ADJUSTMENT}`,
         )
         .expect(200);
-      expect(adjustmentsRes.body).toHaveLength(1);
-      expect(adjustmentsRes.body[0].quantity).toBe(-2);
-      expect(adjustmentsRes.body[0].reason).toBe(
-        'Corrección por conteo físico',
-      );
+      const adjustments = Array.isArray(adjustmentsRes.body)
+        ? adjustmentsRes.body
+        : adjustmentsRes.body.items;
+      expect(adjustments).toHaveLength(1);
+      expect(adjustments[0].quantity).toBe(-2);
+      expect(adjustments[0].reason).toBe('Corrección por conteo físico');
     });
 
     it('bloquea reducir stock por debajo de item.reservedStock con 409', async () => {

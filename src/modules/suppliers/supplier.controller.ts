@@ -45,9 +45,9 @@ export class SuppliersController {
   @ApiOperation({
     summary: 'Obtener la lista de proveedores',
     description:
-      'Devuelve los proveedores activos. Con includeInactive=true incluye también los dados de baja.',
+      'Devuelve los proveedores activos paginados. Con includeInactive=true incluye también los dados de baja.',
   })
-  @ApiOkResponse({ description: 'Lista de proveedores obtenida con éxito' })
+  @ApiOkResponse({ description: 'Lista paginada de proveedores obtenida con éxito' })
   findAll(@Query() query: QuerySuppliersDto) {
     return this.supplierService.findAll(query);
   }

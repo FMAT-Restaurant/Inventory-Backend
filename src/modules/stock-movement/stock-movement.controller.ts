@@ -17,9 +17,9 @@ export class StockMovementController {
   @ApiOperation({
     summary: 'Consultar movimientos de inventario',
     description:
-      'Los movimientos son de solo lectura: no se editan ni eliminan; las correcciones se hacen con movimientos compensatorios.',
+      'Los movimientos son de solo lectura: no se editan ni eliminan; las correcciones se hacen con movimientos compensatorios. Soporta paginación con page/limit.',
   })
-  @ApiOkResponse({ description: 'Lista de movimientos obtenida con éxito' })
+  @ApiOkResponse({ description: 'Lista paginada de movimientos obtenida con éxito' })
   findAll(@Query() query: QueryStockMovementsDto) {
     return this.stockMovementService.findAll(query);
   }

@@ -18,6 +18,7 @@ import {
   OrderEventItem,
   ReservationResultEvent,
   ReservationResultItem,
+  StockReservedBatch,
 } from '../../broker/event-conventions.js';
 import { QueryReservationsDto } from './dto/query-reservations.dto.js';
 import { ReservationCacheService } from './reservation-cache.service.js';
@@ -1140,12 +1141,41 @@ export class ReservationService implements OnModuleInit {
         eventId: randomUUID(),
         orderId: reservation.orderId,
         correlationId: reservation.correlationId ?? null,
-        reservations: reservation.items.map((item) => ({
-          ingredientId: item.itemId.toString(),
-          reservedQuantity: Number(item.quantity),
-        })),
+        reservations: await Promise.all(
+          reservation.items.map(async (item) => ({
+            ingredientId: item.itemId.toString(),
+            reservedQuantity: Number(item.quantity),
+            ...(await this.batchesForReservedLine(
+              String(item.itemId),
+              Number(item.quantity),
+            )),
+          })),
+        ),
       },
     );
+  }
+
+  /**
+   * Lotes que FEFO asignaría a la cantidad reservada, para que Órdenes sepa
+   * con qué lote preparar. Es una sugerencia al momento de reservar; si no
+   * se puede resolver, el evento se publica igual sin el campo.
+   */
+  private async batchesForReservedLine(
+    itemId: string,
+    quantity: number,
+  ): Promise<{ batches?: StockReservedBatch[] }> {
+    try {
+      const batches = await this.batchService.previewFefoAllocation(
+        itemId,
+        quantity,
+      );
+      return { batches };
+    } catch (error) {
+      this.logger.warn(
+        `No se pudieron resolver los lotes FEFO del item '${itemId}' para la respuesta de reserva: ${error}`,
+      );
+      return {};
+    }
   }
 
   private async publishRejected(

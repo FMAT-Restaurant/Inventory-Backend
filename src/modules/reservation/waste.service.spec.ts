@@ -15,7 +15,11 @@ function exec<T>(value: T) {
 describe('WasteService', () => {
   const reservationModel = { findOne: vi.fn() };
   const recipeModel = { findOne: vi.fn() };
-  const stockMovementService = { record: vi.fn(), findAll: vi.fn() };
+  const stockMovementService = {
+    record: vi.fn(),
+    findAll: vi.fn(),
+    findAllUnpaginated: vi.fn(),
+  };
   const batchService = { registerWaste: vi.fn(), findOne: vi.fn() };
   const reservationService = { releaseDish: vi.fn() };
   let service: WasteService;
@@ -30,7 +34,7 @@ describe('WasteService', () => {
   }
 
   function movementsByType(outs: unknown[], wastes: unknown[] = []) {
-    stockMovementService.findAll.mockImplementation(
+    stockMovementService.findAllUnpaginated.mockImplementation(
       async (query: { movementType: StockMovementType }) =>
         query.movementType === StockMovementType.OUT ? outs : wastes,
     );
@@ -152,7 +156,7 @@ describe('WasteService', () => {
           return {};
         },
       );
-      stockMovementService.findAll.mockImplementation(
+      stockMovementService.findAllUnpaginated.mockImplementation(
         async (query: { movementType: StockMovementType }) =>
           query.movementType === StockMovementType.OUT
             ? [{ batchId: BATCH_A, quantity: 50 }]

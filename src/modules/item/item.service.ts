@@ -17,6 +17,11 @@ import {
   ItemChangeEmitter,
 } from './item-change.emitter.js';
 import { SupplierService } from '../suppliers/supplier.service.js';
+import {
+  buildPaginatedResult,
+  normalizePagination,
+  PaginatedResult,
+} from '../../common/pagination/index.js';
 
 const DUPLICATE_KEY_ERROR_CODE = 11000;
 
@@ -178,7 +183,7 @@ export class ItemService implements OnModuleInit {
     );
   }
 
-  async findAll(query?: QueryItemsDto): Promise<Item[]> {
+  private buildListFilter(query?: Pick<QueryItemsDto, 'q'>): FilterQuery<Item> {
     const filter: FilterQuery<Item> = { ...ACTIVE_ITEM_FILTER };
     const term = query?.q?.trim();
 
@@ -186,7 +191,31 @@ export class ItemService implements OnModuleInit {
       filter.name = { $regex: escapeRegExp(term), $options: 'i' };
     }
 
-    return this.itemModel.find(filter).exec();
+    return filter;
+  }
+
+  async findAll(query?: QueryItemsDto): Promise<PaginatedResult<Item>> {
+    const filter = this.buildListFilter(query);
+    const { page, limit } = normalizePagination(query?.page, query?.limit);
+    const [total, items] = await Promise.all([
+      this.itemModel.countDocuments(filter).exec(),
+      this.itemModel
+        .find(filter)
+        .sort({ _id: 1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .exec(),
+    ]);
+
+    return buildPaginatedResult(items, total, page, limit);
+  }
+
+  /**
+   * Lista completa sin paginación (uso interno, p. ej. cálculo de recetas).
+   */
+  async findAllUnpaginated(query?: Pick<QueryItemsDto, 'q'>): Promise<Item[]> {
+    const filter = this.buildListFilter(query);
+    return this.itemModel.find(filter).sort({ _id: 1 }).exec();
   }
 
   /**

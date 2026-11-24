@@ -22,9 +22,17 @@ describe('BatchController', () => {
     status: BatchStatus.ACTIVE,
   };
 
+  const mockPaginatedBatches = {
+    items: [mockBatch],
+    total: 1,
+    page: 1,
+    limit: 20,
+    totalPages: 1,
+  };
+
   const mockBatchService = {
     create: vi.fn().mockResolvedValue(mockBatch),
-    findAll: vi.fn().mockResolvedValue([mockBatch]),
+    findAll: vi.fn().mockResolvedValue(mockPaginatedBatches),
     findOne: vi.fn().mockResolvedValue(mockBatch),
     update: vi.fn().mockResolvedValue(mockBatch),
     remove: vi.fn().mockResolvedValue(undefined),
@@ -52,16 +60,17 @@ describe('BatchController', () => {
   });
 
   describe('findAll', () => {
-    it('debería retornar un array de lotes', async () => {
-      const result = await controller.findAll();
-      expect(service.findAll).toHaveBeenCalledWith(undefined);
-      expect(result).toEqual([mockBatch]);
+    it('debería retornar un listado paginado de lotes', async () => {
+      const result = await controller.findAll({} as any);
+      expect(service.findAll).toHaveBeenCalledWith({});
+      expect(result).toEqual(mockPaginatedBatches);
     });
 
     it('debería pasar itemId al servicio cuando se provee', async () => {
-      const result = await controller.findAll(mockItemId);
-      expect(service.findAll).toHaveBeenCalledWith(mockItemId);
-      expect(result).toEqual([mockBatch]);
+      const query = { itemId: mockItemId } as any;
+      const result = await controller.findAll(query);
+      expect(service.findAll).toHaveBeenCalledWith(query);
+      expect(result).toEqual(mockPaginatedBatches);
     });
   });
 

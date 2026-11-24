@@ -17,9 +17,17 @@ describe('ItemsController', () => {
     storageCondition: 'Refrigerado',
   };
 
+  const mockPaginatedItems = {
+    items: [mockItem],
+    total: 1,
+    page: 1,
+    limit: 20,
+    totalPages: 1,
+  };
+
   const mockItemService = {
     create: vi.fn().mockResolvedValue(mockItem),
-    findAll: vi.fn().mockResolvedValue([mockItem]),
+    findAll: vi.fn().mockResolvedValue(mockPaginatedItems),
     findOne: vi.fn().mockResolvedValue(mockItem),
     update: vi.fn().mockResolvedValue(mockItem),
     remove: vi.fn().mockResolvedValue(undefined),
@@ -47,10 +55,10 @@ describe('ItemsController', () => {
   });
 
   describe('findAll', () => {
-    it('debería retornar un array de items', async () => {
+    it('debería retornar un listado paginado de items', async () => {
       const result = await controller.findAll({});
       expect(service.findAll).toHaveBeenCalledWith({});
-      expect(result).toEqual([mockItem]);
+      expect(result).toEqual(mockPaginatedItems);
     });
 
     it('debería reenviar el término de búsqueda al servicio', async () => {
@@ -59,7 +67,7 @@ describe('ItemsController', () => {
       const result = await controller.findAll(query);
 
       expect(service.findAll).toHaveBeenCalledWith(query);
-      expect(result).toEqual([mockItem]);
+      expect(result).toEqual(mockPaginatedItems);
     });
   });
 

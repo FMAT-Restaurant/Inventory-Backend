@@ -23,6 +23,12 @@ import {
   StockMovement,
   StockMovementType,
 } from '../stock-movement/schemas/stock-movement.schema.js';
+import {
+  buildPaginatedResult,
+  normalizePagination,
+  PaginatedResult,
+} from '../../common/pagination/index.js';
+import { QueryBatchesDto } from './dto/query-batches.dto.js';
 
 const DUPLICATE_KEY_ERROR_CODE = 11000;
 
@@ -55,6 +61,14 @@ export interface SupplierCostHistoryPage {
   filters: {
     items: Array<{ itemId: string; itemName: string; unit: string }>;
   };
+}
+
+// Lote propuesto por una asignación FEFO sin consumo (vista previa de reserva)
+export interface FefoBatchAllocation {
+  batchId: string;
+  batchNumber: string;
+  expirationDate: string;
+  quantity: number;
 }
 
 const COST_HISTORY_MAX_LIMIT = 100;
@@ -314,14 +328,28 @@ export class BatchService implements OnModuleInit {
     return Object.keys(range).length > 0 ? range : null;
   }
 
-  async findAll(itemId?: string): Promise<Batch[]> {
-    if (itemId) {
-      if (!isValidObjectId(itemId)) {
-        return [];
+  async findAll(query: QueryBatchesDto = {}): Promise<PaginatedResult<Batch>> {
+    const { page, limit } = normalizePagination(query.page, query.limit);
+    const filter: Record<string, unknown> = {};
+
+    if (query.itemId) {
+      if (!isValidObjectId(query.itemId)) {
+        return buildPaginatedResult([], 0, page, limit);
       }
-      return this.batchModel.find({ itemId }).exec();
+      filter.itemId = query.itemId;
     }
-    return this.batchModel.find().exec();
+
+    const [total, items] = await Promise.all([
+      this.batchModel.countDocuments(filter).exec(),
+      this.batchModel
+        .find(filter)
+        .sort({ _id: 1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .exec(),
+    ]);
+
+    return buildPaginatedResult(items, total, page, limit);
   }
 
   async findOne(id: string): Promise<Batch> {
@@ -898,5 +926,70 @@ export class BatchService implements OnModuleInit {
     }
 
     await this.syncItemStockAndCost(itemId);
+  }
+
+  /**
+   * Sugerencia de lotes que FEFO asignaría a una cantidad, sin mutar nada.
+   * Se usa para informar a Órdenes con qué lote preparar al reservar. Es
+   * orientativa: la trazabilidad definitiva se fija al consumir (`order.served`).
+   * Nunca lanza por stock insuficiente: devuelve solo lo alcanzable.
+   */
+  async previewFefoAllocation(
+    itemId: string,
+    quantity: number,
+  ): Promise<FefoBatchAllocation[]> {
+    if (
+      !isValidObjectId(itemId) ||
+      !Number.isFinite(quantity) ||
+      quantity <= 0
+    ) {
+      return [];
+    }
+
+    let remaining = Math.round(quantity * 1000) / 1000;
+    const allocations: FefoBatchAllocation[] = [];
+    const rawBatches = await this.batchModel
+      .find({ itemId })
+      .sort({ expirationDate: 1, _id: 1 })
+      .exec();
+
+    const batches = [...rawBatches].sort((a, b) => {
+      const aTime = a.expirationDate
+        ? new Date(a.expirationDate).getTime()
+        : Number.POSITIVE_INFINITY;
+      const bTime = b.expirationDate
+        ? new Date(b.expirationDate).getTime()
+        : Number.POSITIVE_INFINITY;
+      if (aTime !== bTime) return aTime - bTime;
+      return String(a._id).localeCompare(String(b._id));
+    });
+
+    for (const batch of batches) {
+      if (remaining <= 0) {
+        break;
+      }
+      const status = this.computeStatus(batch.quantity, batch.expirationDate);
+      if (
+        (status !== BatchStatus.ACTIVE &&
+          status !== BatchStatus.EXPIRES_TODAY) ||
+        batch.quantity <= 0
+      ) {
+        continue;
+      }
+
+      const take = Math.round(Math.min(remaining, batch.quantity) * 1000) / 1000;
+      allocations.push({
+        batchId: String(batch._id),
+        batchNumber: batch.batchNumber,
+        expirationDate: batch.expirationDate
+          ? new Date(batch.expirationDate).toISOString()
+          : '',
+        quantity: take,
+      });
+
+      remaining = Math.round((remaining - take) * 1000) / 1000;
+    }
+
+    return allocations;
   }
 }

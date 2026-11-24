@@ -214,3 +214,29 @@ export interface ReservationResultEvent {
   items?: ReservationResultItem[];
   timestamp: string;
 }
+
+// Lote sugerido por FEFO al momento de reservar (`inventory.stock.reserved`).
+// Es informativo: no es una asignación garantizada. La trazabilidad definitiva
+// se fija al servir la orden, donde se consume por FEFO sobre los lotes.
+export interface StockReservedBatch {
+  batchId: string;
+  batchNumber: string;
+  expirationDate: string;
+  quantity: number;
+}
+
+// Cantidad reservada de un ingrediente y los lotes propuestos para prepararla.
+export interface StockReservedLine {
+  ingredientId: string;
+  reservedQuantity: number;
+  /** Omitido si no fue posible resolver los lotes (el evento se publica igual). */
+  batches?: StockReservedBatch[];
+}
+
+// `inventory.stock.reserved` / `inventario.stock.reservado`
+export interface StockReservedEvent {
+  eventId: string;
+  orderId: string;
+  correlationId?: string | null;
+  reservations: StockReservedLine[];
+}

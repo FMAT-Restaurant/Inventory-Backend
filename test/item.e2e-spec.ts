@@ -139,7 +139,13 @@ describe('ItemsController (e2e)', () => {
         .get('/items')
         .expect(200);
 
-      expect(response.body).toEqual([]);
+      expect(response.body).toEqual({
+        items: [],
+        total: 0,
+        page: 1,
+        limit: 20,
+        totalPages: 1,
+      });
     });
 
     it('devuelve todos los items persistidos', async () => {
@@ -159,10 +165,11 @@ describe('ItemsController (e2e)', () => {
         .get('/items')
         .expect(200);
 
-      expect(response.body).toHaveLength(2);
-      expect(response.body.map((i: { name: string }) => i.name).sort()).toEqual(
-        ['Aceite', 'Harina'],
-      );
+      expect(response.body.items).toHaveLength(2);
+      expect(response.body.total).toBe(2);
+      expect(
+        response.body.items.map((i: { name: string }) => i.name).sort(),
+      ).toEqual(['Aceite', 'Harina']);
     });
 
     it('no devuelve los items desactivados', async () => {
@@ -179,7 +186,8 @@ describe('ItemsController (e2e)', () => {
         .get('/items')
         .expect(200);
 
-      expect(response.body).toEqual([]);
+      expect(response.body.items).toEqual([]);
+      expect(response.body.total).toBe(0);
     });
 
     it('busca por coincidencia parcial del nombre', async () => {
@@ -199,7 +207,7 @@ describe('ItemsController (e2e)', () => {
         .expect(200);
 
       expect(
-        response.body.map((item: { name: string }) => item.name).sort(),
+        response.body.items.map((item: { name: string }) => item.name).sort(),
       ).toEqual(['Tomate', 'Tomate perita']);
     });
 
@@ -213,8 +221,8 @@ describe('ItemsController (e2e)', () => {
         .query({ q: 'TOMATE' })
         .expect(200);
 
-      expect(response.body).toHaveLength(1);
-      expect(response.body[0].name).toBe('Tomate');
+      expect(response.body.items).toHaveLength(1);
+      expect(response.body.items[0].name).toBe('Tomate');
     });
 
     it('devuelve una lista vacía cuando no hay coincidencias', async () => {
@@ -227,7 +235,8 @@ describe('ItemsController (e2e)', () => {
         .query({ q: 'cebolla' })
         .expect(200);
 
-      expect(response.body).toEqual([]);
+      expect(response.body.items).toEqual([]);
+      expect(response.body.total).toBe(0);
     });
 
     it('no devuelve items desactivados aunque coincidan con la búsqueda', async () => {
@@ -245,7 +254,8 @@ describe('ItemsController (e2e)', () => {
         .query({ q: 'tomate' })
         .expect(200);
 
-      expect(response.body).toEqual([]);
+      expect(response.body.items).toEqual([]);
+      expect(response.body.total).toBe(0);
     });
 
     it('trata los caracteres especiales de regex como texto literal', async () => {
@@ -261,8 +271,8 @@ describe('ItemsController (e2e)', () => {
         .query({ q: 'tom.ate' })
         .expect(200);
 
-      expect(response.body).toHaveLength(1);
-      expect(response.body[0].name).toBe('Tom.ate');
+      expect(response.body.items).toHaveLength(1);
+      expect(response.body.items[0].name).toBe('Tom.ate');
     });
 
     it('devuelve todos los items activos cuando q está vacío', async () => {
@@ -278,7 +288,8 @@ describe('ItemsController (e2e)', () => {
         .query({ q: '' })
         .expect(200);
 
-      expect(response.body).toHaveLength(2);
+      expect(response.body.items).toHaveLength(2);
+      expect(response.body.total).toBe(2);
     });
   });
 

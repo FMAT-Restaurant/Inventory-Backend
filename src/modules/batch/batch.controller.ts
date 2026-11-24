@@ -16,12 +16,12 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiParam,
-  ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
 import { BatchService } from './batch.service.js';
 import { CreateBatchDto } from './dto/create-batch.dto.js';
 import { UpdateBatchDto } from './dto/update-batch.dto.js';
+import { QueryBatchesDto } from './dto/query-batches.dto.js';
 import {
   CurrentUser,
   RequiredPermissions,
@@ -46,15 +46,10 @@ export class BatchController {
 
   @Get()
   @RequiredPermissions(PERMISSIONS.BATCHES_READ)
-  @ApiOperation({ summary: 'Obtener la lista completa de lotes' })
-  @ApiQuery({
-    name: 'itemId',
-    required: false,
-    description: 'Filtrar lotes por ID de item',
-  })
-  @ApiOkResponse({ description: 'Lista de lotes obtenida con éxito' })
-  findAll(@Query('itemId') itemId?: string) {
-    return this.batchService.findAll(itemId);
+  @ApiOperation({ summary: 'Obtener la lista paginada de lotes' })
+  @ApiOkResponse({ description: 'Lista paginada de lotes obtenida con éxito' })
+  findAll(@Query() query: QueryBatchesDto) {
+    return this.batchService.findAll(query);
   }
 
   @Get(':id')

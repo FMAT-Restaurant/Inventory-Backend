@@ -222,12 +222,12 @@ export class WasteService {
     orderId: string,
   ): Promise<Map<string, Array<{ batchId: string; available: number }>>> {
     const outs = (
-      await this.stockMovementService.findAll({
+      await this.stockMovementService.findAllUnpaginated({
         referenceId: orderId,
         movementType: StockMovementType.OUT,
       })
     ).reverse();
-    const wastes = await this.stockMovementService.findAll({
+    const wastes = await this.stockMovementService.findAllUnpaginated({
       referenceId: orderId,
       movementType: StockMovementType.WASTE,
     });

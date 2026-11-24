@@ -32,6 +32,7 @@ import {
   RecipeItemDetailResponseDto,
   RecipeResponseDto,
 } from './dto/recipe-response.dto.js';
+import { normalizePagination } from '../../common/pagination/index.js';
 
 const DUPLICATE_KEY_ERROR_CODE = 11000;
 
@@ -193,10 +194,18 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async findAll(query?: QueryRecipesDto): Promise<RecipeResponseDto[]> {
+  async findAll(
+    query?: QueryRecipesDto & { page?: number; limit?: number },
+  ): Promise<{
+    items: RecipeResponseDto[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
     const [recipes, allItems] = await Promise.all([
-      this.recipeModel.find().exec(),
-      this.itemService.findAll(),
+      this.recipeModel.find().sort({ _id: 1 }).exec(),
+      this.itemService.findAllUnpaginated(),
     ]);
 
     const itemMap = new Map<string, Item>(
@@ -211,7 +220,20 @@ export class RecipeService implements OnModuleInit, OnModuleDestroy {
       result = result.filter((r) => r.isAvailable === query.available);
     }
 
-    return result;
+    const { page, limit } = normalizePagination(query?.page, query?.limit);
+    const total = result.length;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const safePage = Math.min(page, totalPages);
+    const start = (safePage - 1) * limit;
+    const items = result.slice(start, start + limit);
+
+    return {
+      items,
+      total,
+      page: safePage,
+      limit,
+      totalPages,
+    };
   }
 
   async findOne(idOrPlateId: string): Promise<RecipeResponseDto> {
