@@ -379,32 +379,100 @@ export class BatchService implements OnModuleInit {
       currentBatch.quantity,
       currentBatch.expirationDate,
     );
+    const { reason, ...batchChanges } = updateDto;
+    const hasConsumption =
+      currentBatch.initialQuantity !== undefined &&
+      Number(currentBatch.quantity) < Number(currentBatch.initialQuantity);
 
+    this.assertBatchEditable(
+      currentBatch,
+      currentStatus,
+      batchChanges,
+      hasConsumption,
+    );
+
+    const { updatePayload, attemptedBatchNumber } =
+      await this.buildBatchUpdatePayload(
+        currentBatch,
+        batchChanges,
+        hasConsumption,
+      );
+
+    const nextQuantity = batchChanges.quantity ?? currentBatch.quantity;
+    const nextExpirationDate =
+      batchChanges.expirationDate !== undefined
+        ? batchChanges.expirationDate || null
+        : currentBatch.expirationDate;
+    const status = this.computeStatus(nextQuantity, nextExpirationDate);
+
+    await this.assertUsableReductionCovered(
+      currentBatch,
+      currentStatus,
+      nextQuantity,
+      status,
+    );
+
+    const updatedBatch = await this.persistBatchUpdate(
+      id,
+      updatePayload,
+      status,
+      attemptedBatchNumber,
+    );
+
+    await this.recordBatchUpdateMovement(
+      id,
+      currentBatch,
+      currentStatus,
+      nextQuantity,
+      reason,
+      createdBy,
+    );
+    await this.syncItemStockAndCost(String(currentBatch.itemId));
+
+    return updatedBatch;
+  }
+
+  private assertBatchEditable(
+    currentBatch: Batch,
+    currentStatus: BatchStatus,
+    batchChanges: Omit<UpdateBatchDto, 'reason'>,
+    hasConsumption: boolean,
+  ): void {
     if (currentStatus === BatchStatus.DEPLETED) {
       throw new BadRequestException(
         'No se puede modificar un lote agotado o dado de baja',
       );
     }
 
-    const { reason, ...batchChanges } = updateDto;
-
-    if (
-      currentStatus === BatchStatus.EXPIRED &&
-      (batchChanges.quantity !== 0 ||
-        batchChanges.cost !== undefined ||
-        batchChanges.expirationDate !== undefined ||
-        batchChanges.supplierId !== undefined ||
-        batchChanges.batchNumber !== undefined)
-    ) {
+    if (currentStatus === BatchStatus.EXPIRED && !this.isExpiredWriteOffOnly(batchChanges)) {
       throw new BadRequestException(
         'Un lote caducado no puede editarse; solo puede darse de baja por merma (cantidad 0)',
       );
     }
 
-    const hasConsumption =
-      currentBatch.initialQuantity !== undefined &&
-      Number(currentBatch.quantity) < Number(currentBatch.initialQuantity);
+    if (hasConsumption && this.hasRestrictedCaptureChanges(currentBatch, batchChanges)) {
+      throw new BadRequestException(
+        'No se puede modificar el costo, proveedor o número de un lote que ya tiene consumo',
+      );
+    }
+  }
 
+  private isExpiredWriteOffOnly(
+    batchChanges: Omit<UpdateBatchDto, 'reason'>,
+  ): boolean {
+    return (
+      batchChanges.quantity === 0 &&
+      batchChanges.cost === undefined &&
+      batchChanges.expirationDate === undefined &&
+      batchChanges.supplierId === undefined &&
+      batchChanges.batchNumber === undefined
+    );
+  }
+
+  private hasRestrictedCaptureChanges(
+    currentBatch: Batch,
+    batchChanges: Omit<UpdateBatchDto, 'reason'>,
+  ): boolean {
     const costChanged =
       batchChanges.cost !== undefined &&
       Number(batchChanges.cost) !== Number(currentBatch.cost);
@@ -416,105 +484,134 @@ export class BatchService implements OnModuleInit {
       batchChanges.batchNumber !== undefined &&
       batchChanges.batchNumber.trim() !== '';
 
-    if (hasConsumption && (costChanged || supplierChanged || batchNumberProvided)) {
-      throw new BadRequestException(
-        'No se puede modificar el costo, proveedor o número de un lote que ya tiene consumo',
-      );
-    }
+    return costChanged || supplierChanged || batchNumberProvided;
+  }
 
+  private async buildBatchUpdatePayload(
+    currentBatch: Batch,
+    batchChanges: Omit<UpdateBatchDto, 'reason'>,
+    hasConsumption: boolean,
+  ): Promise<{
+    updatePayload: Record<string, unknown>;
+    attemptedBatchNumber?: string;
+  }> {
     const updatePayload: Record<string, unknown> = { ...batchChanges };
+    const supplierChanged =
+      batchChanges.supplierId !== undefined &&
+      String(batchChanges.supplierId ?? '') !==
+        String(currentBatch.supplierId ?? '');
 
     if (supplierChanged && batchChanges.supplierId) {
       await this.supplierService.assertAssignable(batchChanges.supplierId);
     }
 
-    if (batchNumberProvided) {
+    let attemptedBatchNumber: string | undefined;
+    if (batchChanges.batchNumber?.trim()) {
       const item = await this.itemService.findOne(String(currentBatch.itemId));
-      const normalizedBatchNumber = this.buildBatchNumber(
+      attemptedBatchNumber = this.buildBatchNumber(
         batchChanges.batchNumber,
         item?.sku,
       );
-      if (hasConsumption && normalizedBatchNumber !== currentBatch.batchNumber) {
-        throw new BadRequestException(
-          'No se puede modificar el número de un lote que ya tiene consumo',
-        );
-      }
-      updatePayload.batchNumber = normalizedBatchNumber;
+      updatePayload.batchNumber = attemptedBatchNumber;
     } else {
       delete updatePayload.batchNumber;
     }
 
+    const costChanged =
+      batchChanges.cost !== undefined &&
+      Number(batchChanges.cost) !== Number(currentBatch.cost);
     if (costChanged && !hasConsumption) {
       updatePayload.purchaseCost = batchChanges.cost;
     }
 
     if (batchChanges.expirationDate !== undefined) {
-      if (!batchChanges.expirationDate) {
-        const item = await this.itemService.findOne(
-          String(currentBatch.itemId),
+      updatePayload.expirationDate = await this.validateExpirationUpdate(
+        currentBatch,
+        batchChanges.expirationDate,
+      );
+    }
+
+    if (
+      batchChanges.quantity !== undefined &&
+      Number(batchChanges.quantity) > Number(currentBatch.initialQuantity ?? 0)
+    ) {
+      updatePayload.initialQuantity = batchChanges.quantity;
+    }
+
+    return { updatePayload, attemptedBatchNumber };
+  }
+
+  private async validateExpirationUpdate(
+    currentBatch: Batch,
+    nextExpiration: string | null,
+  ): Promise<string | null> {
+    if (!nextExpiration) {
+      const item = await this.itemService.findOne(String(currentBatch.itemId));
+      if (item?.isPerishable) {
+        throw new BadRequestException(
+          'La fecha de caducidad es obligatoria para insumos perecederos',
         );
-        if (item?.isPerishable) {
-          throw new BadRequestException(
-            'La fecha de caducidad es obligatoria para insumos perecederos',
-          );
-        }
-        updatePayload.expirationDate = null;
-      } else {
-        const createdAt = (currentBatch as unknown as { createdAt?: Date })
-          .createdAt;
-        if (createdAt) {
-          const expDate = new Date(batchChanges.expirationDate);
-          const expDay = Date.UTC(
-            expDate.getUTCFullYear(),
-            expDate.getUTCMonth(),
-            expDate.getUTCDate(),
-          );
-          const entryDate = new Date(createdAt);
-          const entryDay = Date.UTC(
-            entryDate.getUTCFullYear(),
-            entryDate.getUTCMonth(),
-            entryDate.getUTCDate(),
-          );
-          if (expDay < entryDay) {
-            throw new BadRequestException(
-              'La fecha de caducidad no puede ser anterior a la fecha de ingreso del lote',
-            );
-          }
-        }
+      }
+      return null;
+    }
+
+    const createdAt = (currentBatch as unknown as { createdAt?: Date })
+      .createdAt;
+    if (createdAt) {
+      const expDate = new Date(nextExpiration);
+      const expDay = Date.UTC(
+        expDate.getUTCFullYear(),
+        expDate.getUTCMonth(),
+        expDate.getUTCDate(),
+      );
+      const entryDate = new Date(createdAt);
+      const entryDay = Date.UTC(
+        entryDate.getUTCFullYear(),
+        entryDate.getUTCMonth(),
+        entryDate.getUTCDate(),
+      );
+      if (expDay < entryDay) {
+        throw new BadRequestException(
+          'La fecha de caducidad no puede ser anterior a la fecha de ingreso del lote',
+        );
       }
     }
 
-    const nextQuantity = batchChanges.quantity ?? currentBatch.quantity;
-    if (
-      batchChanges.quantity !== undefined &&
-      Number(nextQuantity) > Number(currentBatch.initialQuantity ?? 0)
-    ) {
-      updatePayload.initialQuantity = nextQuantity;
-    }
-    const nextExpirationDate =
-      batchChanges.expirationDate !== undefined
-        ? (batchChanges.expirationDate || null)
-        : currentBatch.expirationDate;
-    const status = this.computeStatus(nextQuantity, nextExpirationDate);
+    return nextExpiration;
+  }
 
-    const isCurrentlyUsable =
+  private async assertUsableReductionCovered(
+    currentBatch: Batch,
+    currentStatus: BatchStatus,
+    nextQuantity: number,
+    nextStatus: BatchStatus,
+  ): Promise<void> {
+    const currentUsableQty =
       currentStatus === BatchStatus.ACTIVE ||
-      currentStatus === BatchStatus.EXPIRES_TODAY;
-    const isNextUsable =
-      status === BatchStatus.ACTIVE || status === BatchStatus.EXPIRES_TODAY;
-    const currentUsableQty = isCurrentlyUsable
-      ? Number(currentBatch.quantity)
-      : 0;
-    const nextUsableQty = isNextUsable ? Number(nextQuantity) : 0;
+      currentStatus === BatchStatus.EXPIRES_TODAY
+        ? Number(currentBatch.quantity)
+        : 0;
+    const nextUsableQty =
+      nextStatus === BatchStatus.ACTIVE ||
+      nextStatus === BatchStatus.EXPIRES_TODAY
+        ? Number(nextQuantity)
+        : 0;
 
     if (nextUsableQty < currentUsableQty) {
       await this.assertReservedStockCovered(
         String(currentBatch.itemId),
-        id,
+        String(currentBatch._id),
         nextUsableQty,
       );
     }
+  }
 
+  private async persistBatchUpdate(
+    id: string,
+    updatePayload: Record<string, unknown>,
+    status: BatchStatus,
+    attemptedBatchNumber?: string,
+  ): Promise<Batch> {
     let updatedBatch: Batch | null;
     try {
       updatedBatch = await this.batchModel
@@ -523,7 +620,7 @@ export class BatchService implements OnModuleInit {
     } catch (error) {
       if (this.isDuplicateKeyError(error)) {
         throw new ConflictException(
-          `Ya existe un lote con el número '${String(updatePayload.batchNumber ?? '')}' para este item`,
+          `Ya existe un lote con el número '${attemptedBatchNumber ?? ''}' para este item`,
         );
       }
       throw error;
@@ -533,30 +630,39 @@ export class BatchService implements OnModuleInit {
       throw new NotFoundException(`Lote con id '${id}' no encontrado`);
     }
 
+    return updatedBatch;
+  }
+
+  private async recordBatchUpdateMovement(
+    id: string,
+    currentBatch: Batch,
+    currentStatus: BatchStatus,
+    nextQuantity: number,
+    reason?: string,
+    createdBy = 'system',
+  ): Promise<void> {
     const quantityDelta = Number(nextQuantity) - Number(currentBatch.quantity);
-    if (quantityDelta !== 0) {
-      const isExpiredWriteOff =
-        currentStatus === BatchStatus.EXPIRED && Number(nextQuantity) === 0;
-      await this.recordMovementSafely({
-        batchId: id,
-        movementType: isExpiredWriteOff
-          ? StockMovementType.WASTE
-          : StockMovementType.ADJUSTMENT,
-        quantity: isExpiredWriteOff
-          ? Number(currentBatch.quantity)
-          : quantityDelta,
-        reason:
-          reason ??
-          (isExpiredWriteOff
-            ? 'Baja por caducidad de lote'
-            : 'Ajuste manual de lote'),
-        createdBy,
-      });
+    if (quantityDelta === 0) {
+      return;
     }
 
-    await this.syncItemStockAndCost(String(currentBatch.itemId));
-
-    return updatedBatch;
+    const isExpiredWriteOff =
+      currentStatus === BatchStatus.EXPIRED && Number(nextQuantity) === 0;
+    await this.recordMovementSafely({
+      batchId: id,
+      movementType: isExpiredWriteOff
+        ? StockMovementType.WASTE
+        : StockMovementType.ADJUSTMENT,
+      quantity: isExpiredWriteOff
+        ? Number(currentBatch.quantity)
+        : quantityDelta,
+      reason:
+        reason ??
+        (isExpiredWriteOff
+          ? 'Baja por caducidad de lote'
+          : 'Ajuste manual de lote'),
+      createdBy,
+    });
   }
 
   async remove(id: string, createdBy = 'system'): Promise<void> {
@@ -813,6 +919,113 @@ export class BatchService implements OnModuleInit {
     return { batch: updated, movement };
   }
 
+  private sortBatchesFefo(batches: Batch[]): Batch[] {
+    // Lotes con fecha de caducidad se consumen primero (FEFO); los lotes sin
+    // caducidad (no perecederos) van después en orden FIFO por _id.
+    return [...batches].sort((a, b) => {
+      const aTime = a.expirationDate
+        ? new Date(a.expirationDate).getTime()
+        : Number.POSITIVE_INFINITY;
+      const bTime = b.expirationDate
+        ? new Date(b.expirationDate).getTime()
+        : Number.POSITIVE_INFINITY;
+      if (aTime !== bTime) return aTime - bTime;
+      return String(a._id).localeCompare(String(b._id));
+    });
+  }
+
+  private isBatchConsumable(batch: Batch): boolean {
+    const status = this.computeStatus(batch.quantity, batch.expirationDate);
+    return (
+      (status === BatchStatus.ACTIVE || status === BatchStatus.EXPIRES_TODAY) &&
+      batch.quantity > 0
+    );
+  }
+
+  private async syncPostConsumeBatch(
+    updated: Batch,
+    take: number,
+    referenceId: string | undefined,
+    reason: string,
+  ): Promise<void> {
+    const nextQuantity =
+      Math.round(Math.max(0, Number(updated.quantity)) * 1000) / 1000;
+    const nextStatus = this.computeStatus(
+      nextQuantity,
+      updated.expirationDate,
+    );
+
+    if (nextStatus === BatchStatus.DEPLETED) {
+      await this.batchModel
+        .updateOne(
+          { _id: updated._id, quantity: { $lte: 0.0005 } },
+          { $set: { status: BatchStatus.DEPLETED } },
+        )
+        .exec();
+    } else if (nextStatus !== updated.status) {
+      await this.batchModel
+        .updateOne(
+          { _id: updated._id, quantity: { $gt: 0 } },
+          { $set: { status: nextStatus } },
+        )
+        .exec();
+    }
+
+    await this.recordMovementSafely({
+      batchId: String(updated._id),
+      movementType: StockMovementType.OUT,
+      quantity: take,
+      referenceId: referenceId ?? null,
+      reason,
+    });
+  }
+
+  private async runFefoPass(
+    itemId: string,
+    initialRemaining: number,
+    referenceId: string | undefined,
+    reason: string,
+  ): Promise<{ remaining: number; hadContention: boolean }> {
+    const rawBatches = await this.batchModel
+      .find({ itemId })
+      .sort({ expirationDate: 1, _id: 1 })
+      .exec();
+    const batches = this.sortBatchesFefo(rawBatches).filter((b) =>
+      this.isBatchConsumable(b),
+    );
+
+    let remaining = initialRemaining;
+    let hadContention = false;
+    const postConsumeTasks: Promise<void>[] = [];
+
+    for (const batch of batches) {
+      if (remaining <= 0) {
+        break;
+      }
+      const take = Math.round(Math.min(remaining, batch.quantity) * 1000) / 1000;
+      const updated = await this.batchModel
+        .findOneAndUpdate(
+          { _id: batch._id, quantity: { $gte: take } },
+          { $inc: { quantity: -take } },
+          { new: true },
+        )
+        .exec();
+
+      if (!updated) {
+        hadContention = true;
+        break;
+      }
+
+      postConsumeTasks.push(
+        this.syncPostConsumeBatch(updated, take, referenceId, reason),
+      );
+      remaining = Math.round((remaining - take) * 1000) / 1000;
+    }
+
+    await Promise.all(postConsumeTasks);
+    return { remaining, hadContention };
+  }
+
   async consumeByFefo(
     itemId: string,
     quantityToConsume: number,
@@ -835,92 +1048,14 @@ export class BatchService implements OnModuleInit {
       attempt < MAX_FEFO_ATTEMPTS && remaining > 0;
       attempt++
     ) {
-      const rawBatches = await this.batchModel
-        .find({ itemId })
-        .sort({ expirationDate: 1, _id: 1 })
-        .exec();
-
-      // Lotes con fecha de caducidad se consumen primero (FEFO); los lotes sin
-      // caducidad (no perecederos) van después en orden FIFO por _id.
-      const batches = [...rawBatches].sort((a, b) => {
-        const aTime = a.expirationDate
-          ? new Date(a.expirationDate).getTime()
-          : Number.POSITIVE_INFINITY;
-        const bTime = b.expirationDate
-          ? new Date(b.expirationDate).getTime()
-          : Number.POSITIVE_INFINITY;
-        if (aTime !== bTime) return aTime - bTime;
-        return String(a._id).localeCompare(String(b._id));
-      });
-
-      let hadContention = false;
-
-      for (const batch of batches) {
-        if (remaining <= 0) {
-          break;
-        }
-        const status = this.computeStatus(batch.quantity, batch.expirationDate);
-        if (status === BatchStatus.EXPIRED) {
-          continue;
-        }
-        if (
-          (status !== BatchStatus.ACTIVE &&
-            status !== BatchStatus.EXPIRES_TODAY) ||
-          batch.quantity <= 0
-        ) {
-          continue;
-        }
-
-        const take = Math.round(Math.min(remaining, batch.quantity) * 1000) / 1000;
-        const updated = await this.batchModel
-          .findOneAndUpdate(
-            { _id: batch._id, quantity: { $gte: take } },
-            { $inc: { quantity: -take } },
-            { new: true },
-          )
-          .exec();
-
-        if (!updated) {
-          // Otro consumo concurrente modificó este lote: releemos en el
-          // siguiente intento para respetar estrictamente el orden FEFO.
-          hadContention = true;
-          break;
-        }
-
-        const nextQuantity = Math.round(Math.max(0, Number(updated.quantity)) * 1000) / 1000;
-        const nextStatus = this.computeStatus(
-          nextQuantity,
-          updated.expirationDate,
-        );
-
-        if (nextStatus === BatchStatus.DEPLETED) {
-          await this.batchModel
-            .updateOne(
-              { _id: updated._id, quantity: { $lte: 0.0005 } },
-              { $set: { status: BatchStatus.DEPLETED } },
-            )
-            .exec();
-        } else if (nextStatus !== updated.status) {
-          await this.batchModel
-            .updateOne(
-              { _id: updated._id, quantity: { $gt: 0 } },
-              { $set: { status: nextStatus } },
-            )
-            .exec();
-        }
-
-        await this.recordMovementSafely({
-          batchId: String(updated._id),
-          movementType: StockMovementType.OUT,
-          quantity: take,
-          referenceId: referenceId ?? null,
-          reason,
-        });
-
-        remaining = Math.round((remaining - take) * 1000) / 1000;
-      }
-
-      if (!hadContention) {
+      const pass = await this.runFefoPass(
+        itemId,
+        remaining,
+        referenceId,
+        reason,
+      );
+      remaining = pass.remaining;
+      if (!pass.hadContention) {
         break;
       }
     }

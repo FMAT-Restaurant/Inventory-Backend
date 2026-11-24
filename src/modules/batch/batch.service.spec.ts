@@ -466,6 +466,52 @@ describe('BatchService', () => {
       ).rejects.toThrow(BadRequestException);
       expect(MockModel.findByIdAndUpdate).not.toHaveBeenCalled();
     });
+
+    it('debería permitir quitar expirationDate en no perecedero y rechazarlo en perecedero', async () => {
+      mockExecFindById.mockResolvedValue(mockBatch);
+      mockItemService.findOne.mockResolvedValueOnce({
+        _id: mockItemId,
+        isPerishable: true,
+      });
+
+      await expect(
+        service.update(mockBatchId, { expirationDate: null }),
+      ).rejects.toThrow(BadRequestException);
+
+      mockItemService.findOne.mockResolvedValueOnce({
+        _id: mockItemId,
+        isPerishable: false,
+      });
+      mockExecFindByIdAndUpdate.mockResolvedValueOnce({
+        ...mockBatch,
+        expirationDate: null,
+      });
+
+      await expect(
+        service.update(mockBatchId, { expirationDate: null }),
+      ).resolves.toBeDefined();
+    });
+
+    it('debería validar proveedor al cambiar supplierId y lanzar ConflictException si batchNumber choca', async () => {
+      mockExecFindById.mockResolvedValue(mockBatch);
+      mockItemService.findOne.mockResolvedValueOnce({
+        _id: mockItemId,
+        sku: 'TOM-01',
+      });
+      mockExecFindByIdAndUpdate.mockRejectedValueOnce(
+        Object.assign(new Error('E11000 duplicate key'), { code: 11000 }),
+      );
+
+      await expect(
+        service.update(mockBatchId, {
+          supplierId: '60d5ec9af682fbd39a1b865c',
+          batchNumber: 'DUP-01',
+        }),
+      ).rejects.toThrow(ConflictException);
+      expect(mockSupplierService.assertAssignable).toHaveBeenCalledWith(
+        '60d5ec9af682fbd39a1b865c',
+      );
+    });
   });
 
   describe('remove', () => {
@@ -851,6 +897,38 @@ describe('BatchService', () => {
 
       expect(MockModel.findOneAndUpdate).toHaveBeenCalledOnce();
       expect(mockItemService.updateStockAndCost).toHaveBeenCalled();
+    });
+
+    it('consume lotes sin caducidad después de los que sí tienen fecha en previewFefoAllocation', async () => {
+      const noExpiry = batchDoc({
+        _id: 'no-exp',
+        batchNumber: 'NO-EXP',
+        quantity: 10,
+        expirationDate: null,
+      });
+      const withExpiry = batchDoc({
+        _id: 'with-exp',
+        batchNumber: 'WITH-EXP',
+        quantity: 3,
+        expirationDate: new Date('2099-05-01'),
+      });
+      mockExecFind.mockResolvedValueOnce([noExpiry, withExpiry]);
+
+      const plan = await service.previewFefoAllocation(mockItemId, 5);
+      expect(plan).toEqual([
+        {
+          batchId: 'with-exp',
+          batchNumber: 'WITH-EXP',
+          expirationDate: '2099-05-01T00:00:00.000Z',
+          quantity: 3,
+        },
+        {
+          batchId: 'no-exp',
+          batchNumber: 'NO-EXP',
+          expirationDate: '',
+          quantity: 2,
+        },
+      ]);
     });
 
     it('no sincroniza si el itemId no es un ObjectId válido', async () => {
