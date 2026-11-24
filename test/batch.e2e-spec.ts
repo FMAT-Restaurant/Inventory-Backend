@@ -158,6 +158,49 @@ describe('BatchController (e2e)', () => {
         .send(payload)
         .expect(409);
     });
+    it('permite crear lotes sin caducidad para insumos no perecederos y exige fecha para perecederos', async () => {
+      const spoon = await itemModel.create({
+        sku: 'UTC-01',
+        name: 'Cucharas',
+        category: 'Utensilios',
+        unit: 'pza',
+        minStock: 10,
+        isPerishable: false,
+        storageCondition: 'Ambiente',
+      });
+
+      const createdSpoonBatch = await request(app.getHttpServer())
+        .post('/batches')
+        .send({
+          batchNumber: 'LOTE-01',
+          itemId: String(spoon._id),
+          quantity: 50,
+          cost: 1.5,
+        })
+        .expect(201);
+
+      expect(createdSpoonBatch.body.status).toBe(BatchStatus.ACTIVE);
+      expect(createdSpoonBatch.body.expirationDate).toBeNull();
+
+      const perishable = await itemModel.create({
+        sku: 'VER-PER-01',
+        name: 'Lechuga',
+        category: 'Verduras',
+        unit: 'kg',
+        minStock: 2,
+        isPerishable: true,
+        storageCondition: 'Refrigerado',
+      });
+
+      await request(app.getHttpServer())
+        .post('/batches')
+        .send({
+          itemId: String(perishable._id),
+          quantity: 5,
+          cost: 10,
+        })
+        .expect(400);
+    });
   });
 
   describe('PATCH /batches/:id (ajuste, auditoría y reservedStock)', () => {

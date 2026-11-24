@@ -28,8 +28,8 @@ export class Batch extends Document {
   @Prop({ required: true, min: 0 })
   quantity: number;
 
-  @Prop({ required: true })
-  expirationDate: Date;
+  @Prop({ type: Date, required: false, default: null })
+  expirationDate?: Date | null;
 
   @Prop({ type: Types.ObjectId, ref: 'Supplier', required: false })
   supplierId?: Types.ObjectId;

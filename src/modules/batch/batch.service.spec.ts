@@ -122,6 +122,41 @@ describe('BatchService', () => {
     expect(service).toBeDefined();
   });
 
+  describe('create (no perecederos vs perecederos)', () => {
+    it('permite crear un lote sin fecha de caducidad para insumos no perecederos y lo deja ACTIVE', async () => {
+      mockItemService.findOne.mockResolvedValueOnce({
+        _id: mockItemId,
+        sku: 'UTC-01',
+        isPerishable: false,
+      });
+
+      const result = await service.create({
+        itemId: mockItemId,
+        quantity: 50,
+        cost: 1.5,
+      });
+
+      expect(result.status).toBe(BatchStatus.ACTIVE);
+      expect(result.expirationDate).toBeNull();
+    });
+
+    it('rechaza crear un lote sin fecha de caducidad si el insumo es perecedero', async () => {
+      mockItemService.findOne.mockResolvedValueOnce({
+        _id: mockItemId,
+        sku: 'VER-01',
+        isPerishable: true,
+      });
+
+      await expect(
+        service.create({
+          itemId: mockItemId,
+          quantity: 10,
+          cost: 15,
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
   describe('findAll', () => {
     it('debería retornar una lista de lotes', async () => {
       const result = await service.findAll();
@@ -841,7 +876,7 @@ describe('BatchService', () => {
 
       expect(MockModel.find).toHaveBeenCalledWith({
         status: { $in: [BatchStatus.ACTIVE, BatchStatus.EXPIRES_TODAY] },
-        expirationDate: { $lt: new Date('2026-11-11T00:00:00.000Z') },
+        expirationDate: { $ne: null, $lt: new Date('2026-11-11T00:00:00.000Z') },
       });
       expect(MockModel.updateOne).toHaveBeenCalledWith(
         { _id: 'lote-vencido' },

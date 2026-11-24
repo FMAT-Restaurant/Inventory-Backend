@@ -85,14 +85,19 @@ export class BatchService implements OnModuleInit {
       await this.supplierService.assertAssignable(createDto.supplierId);
     }
 
+    const expirationDate = createDto.expirationDate || null;
+    if (item?.isPerishable && !expirationDate) {
+      throw new BadRequestException(
+        'La fecha de caducidad es obligatoria para insumos perecederos',
+      );
+    }
+
     const batchNumber = this.buildBatchNumber(createDto.batchNumber, item?.sku);
-    const status = this.computeStatus(
-      createDto.quantity,
-      createDto.expirationDate,
-    );
+    const status = this.computeStatus(createDto.quantity, expirationDate);
 
     const newBatch = new this.batchModel({
       ...createDto,
+      expirationDate,
       batchNumber,
       initialQuantity: createDto.quantity,
       purchaseCost: createDto.cost,
@@ -150,11 +155,14 @@ export class BatchService implements OnModuleInit {
 
   private computeStatus(
     quantity: number,
-    expirationDate: Date | string,
+    expirationDate?: Date | string | null,
     now = new Date(),
   ): BatchStatus {
     if (quantity <= 0) {
       return BatchStatus.DEPLETED;
+    }
+    if (!expirationDate) {
+      return BatchStatus.ACTIVE;
     }
 
     const expDate = new Date(expirationDate);
@@ -413,32 +421,46 @@ export class BatchService implements OnModuleInit {
     }
 
     if (batchChanges.expirationDate !== undefined) {
-      const createdAt = (currentBatch as unknown as { createdAt?: Date })
-        .createdAt;
-      if (createdAt) {
-        const expDate = new Date(batchChanges.expirationDate);
-        const expDay = Date.UTC(
-          expDate.getUTCFullYear(),
-          expDate.getUTCMonth(),
-          expDate.getUTCDate(),
+      if (!batchChanges.expirationDate) {
+        const item = await this.itemService.findOne(
+          String(currentBatch.itemId),
         );
-        const entryDate = new Date(createdAt);
-        const entryDay = Date.UTC(
-          entryDate.getUTCFullYear(),
-          entryDate.getUTCMonth(),
-          entryDate.getUTCDate(),
-        );
-        if (expDay < entryDay) {
+        if (item?.isPerishable) {
           throw new BadRequestException(
-            'La fecha de caducidad no puede ser anterior a la fecha de ingreso del lote',
+            'La fecha de caducidad es obligatoria para insumos perecederos',
           );
+        }
+        updatePayload.expirationDate = null;
+      } else {
+        const createdAt = (currentBatch as unknown as { createdAt?: Date })
+          .createdAt;
+        if (createdAt) {
+          const expDate = new Date(batchChanges.expirationDate);
+          const expDay = Date.UTC(
+            expDate.getUTCFullYear(),
+            expDate.getUTCMonth(),
+            expDate.getUTCDate(),
+          );
+          const entryDate = new Date(createdAt);
+          const entryDay = Date.UTC(
+            entryDate.getUTCFullYear(),
+            entryDate.getUTCMonth(),
+            entryDate.getUTCDate(),
+          );
+          if (expDay < entryDay) {
+            throw new BadRequestException(
+              'La fecha de caducidad no puede ser anterior a la fecha de ingreso del lote',
+            );
+          }
         }
       }
     }
 
     const nextQuantity = batchChanges.quantity ?? currentBatch.quantity;
     const nextExpirationDate =
-      batchChanges.expirationDate ?? currentBatch.expirationDate;
+      batchChanges.expirationDate !== undefined
+        ? (batchChanges.expirationDate || null)
+        : currentBatch.expirationDate;
     const status = this.computeStatus(nextQuantity, nextExpirationDate);
 
     const isCurrentlyUsable =
@@ -625,7 +647,7 @@ export class BatchService implements OnModuleInit {
     const candidates = await this.batchModel
       .find({
         status: { $in: [BatchStatus.ACTIVE, BatchStatus.EXPIRES_TODAY] },
-        expirationDate: { $lt: startOfTomorrow },
+        expirationDate: { $ne: null, $lt: startOfTomorrow },
       })
       .exec();
 
@@ -779,10 +801,23 @@ export class BatchService implements OnModuleInit {
       attempt < MAX_FEFO_ATTEMPTS && remaining > 0;
       attempt++
     ) {
-      const batches = await this.batchModel
+      const rawBatches = await this.batchModel
         .find({ itemId })
         .sort({ expirationDate: 1, _id: 1 })
         .exec();
+
+      // Lotes con fecha de caducidad se consumen primero (FEFO); los lotes sin
+      // caducidad (no perecederos) van después en orden FIFO por _id.
+      const batches = [...rawBatches].sort((a, b) => {
+        const aTime = a.expirationDate
+          ? new Date(a.expirationDate).getTime()
+          : Number.POSITIVE_INFINITY;
+        const bTime = b.expirationDate
+          ? new Date(b.expirationDate).getTime()
+          : Number.POSITIVE_INFINITY;
+        if (aTime !== bTime) return aTime - bTime;
+        return String(a._id).localeCompare(String(b._id));
+      });
 
       let hadContention = false;
 
