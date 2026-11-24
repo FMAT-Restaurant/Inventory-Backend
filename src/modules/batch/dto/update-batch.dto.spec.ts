@@ -26,4 +26,21 @@ describe('UpdateBatchDto', () => {
     expect((await validate(zeroCost)).map((e) => e.property)).toContain('cost');
     expect((await validate(negCost)).map((e) => e.property)).toContain('cost');
   });
+
+  it('permite supplierId ObjectId o null y batchNumber', async () => {
+    const valid = plainToInstance(UpdateBatchDto, {
+      supplierId: '60d5ec9af682fbd39a1b865c',
+      batchNumber: 'LOTE-CORREGIDO',
+    });
+    const cleared = plainToInstance(UpdateBatchDto, { supplierId: null });
+    const invalid = plainToInstance(UpdateBatchDto, {
+      supplierId: 'no-es-object-id',
+    });
+
+    expect(await validate(valid)).toHaveLength(0);
+    expect(await validate(cleared)).toHaveLength(0);
+    expect((await validate(invalid)).map((e) => e.property)).toContain(
+      'supplierId',
+    );
+  });
 });

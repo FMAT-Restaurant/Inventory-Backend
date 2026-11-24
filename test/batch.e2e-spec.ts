@@ -304,8 +304,8 @@ describe('BatchController (e2e)', () => {
     });
   });
 
-  describe('GET /suppliers/:id/cost-history', () => {
-    it('retorna historial paginado preservando purchaseCost aunque se edite cost', async () => {
+  describe('GET /suppliers/:id/cost-history y edición pre/post consumo', () => {
+    it('permite corregir cost y batchNumber antes del consumo y los bloquea tras consumo', async () => {
       const created = await request(app.getHttpServer())
         .post('/batches')
         .send({
@@ -318,17 +318,35 @@ describe('BatchController (e2e)', () => {
         })
         .expect(201);
 
-      await request(app.getHttpServer())
+      // Sin consumo: corrige error de captura en cost y batchNumber
+      const corrected = await request(app.getHttpServer())
         .patch(`/batches/${created.body._id}`)
-        .send({ cost: 45 })
+        .send({ cost: 45, batchNumber: 'COST-01-FIX' })
         .expect(200);
+      expect(corrected.body.batchNumber).toBe('ING-BATCH-01-COST-01-FIX');
 
       const history = await request(app.getHttpServer())
-        .get(`/suppliers/${supplierId}/cost-history?itemId=${itemId}&page=1&limit=10`)
+        .get(
+          `/suppliers/${supplierId}/cost-history?itemId=${itemId}&page=1&limit=10`,
+        )
+        .expect(200);
+      expect(history.body.total).toBe(1);
+      expect(history.body.items[0].cost).toBe(45);
+
+      // Registrar consumo parcial y verificar bloqueo de cost/supplier/batchNumber
+      await request(app.getHttpServer())
+        .patch(`/batches/${created.body._id}`)
+        .send({ quantity: 8, reason: 'Consumo parcial' })
         .expect(200);
 
-      expect(history.body.total).toBe(1);
-      expect(history.body.items[0].cost).toBe(30);
+      await request(app.getHttpServer())
+        .patch(`/batches/${created.body._id}`)
+        .send({ cost: 99 })
+        .expect(400);
+      await request(app.getHttpServer())
+        .patch(`/batches/${created.body._id}`)
+        .send({ batchNumber: 'OTRO-99' })
+        .expect(400);
     });
   });
 

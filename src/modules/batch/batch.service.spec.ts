@@ -373,6 +373,37 @@ describe('BatchService', () => {
       ).rejects.toThrow(ConflictException);
       expect(MockModel.findByIdAndUpdate).not.toHaveBeenCalled();
     });
+
+    it('debería bloquear cambios a cost, supplierId o batchNumber si el lote ya tiene consumo', async () => {
+      mockExecFindById.mockResolvedValue({
+        ...mockBatch,
+        initialQuantity: 10,
+        quantity: 6,
+      });
+
+      await expect(
+        service.update(mockBatchId, { cost: 25 }),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service.update(mockBatchId, { supplierId: '60d5ec9af682fbd39a1b865c' }),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service.update(mockBatchId, { batchNumber: 'NUEVO-01' }),
+      ).rejects.toThrow(BadRequestException);
+      expect(MockModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('debería rechazar expirationDate anterior a la fecha de ingreso del lote', async () => {
+      mockExecFindById.mockResolvedValue({
+        ...mockBatch,
+        createdAt: new Date('2026-11-23T12:00:00.000Z'),
+      });
+
+      await expect(
+        service.update(mockBatchId, { expirationDate: '2026-11-20' }),
+      ).rejects.toThrow(BadRequestException);
+      expect(MockModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
   });
 
   describe('remove', () => {

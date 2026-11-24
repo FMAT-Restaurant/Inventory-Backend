@@ -165,9 +165,9 @@ export class BatchService implements OnModuleInit {
     );
 
     const today = Date.UTC(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
     );
 
     if (expDay < today) {
@@ -356,11 +356,84 @@ export class BatchService implements OnModuleInit {
       currentStatus === BatchStatus.EXPIRED &&
       (batchChanges.quantity !== 0 ||
         batchChanges.cost !== undefined ||
-        batchChanges.expirationDate !== undefined)
+        batchChanges.expirationDate !== undefined ||
+        batchChanges.supplierId !== undefined ||
+        batchChanges.batchNumber !== undefined)
     ) {
       throw new BadRequestException(
         'Un lote caducado no puede editarse; solo puede darse de baja por merma (cantidad 0)',
       );
+    }
+
+    const hasConsumption =
+      currentBatch.initialQuantity !== undefined &&
+      Number(currentBatch.quantity) < Number(currentBatch.initialQuantity);
+
+    const costChanged =
+      batchChanges.cost !== undefined &&
+      Number(batchChanges.cost) !== Number(currentBatch.cost);
+    const supplierChanged =
+      batchChanges.supplierId !== undefined &&
+      String(batchChanges.supplierId ?? '') !==
+        String(currentBatch.supplierId ?? '');
+    const batchNumberProvided =
+      batchChanges.batchNumber !== undefined &&
+      batchChanges.batchNumber.trim() !== '';
+
+    if (hasConsumption && (costChanged || supplierChanged || batchNumberProvided)) {
+      throw new BadRequestException(
+        'No se puede modificar el costo, proveedor o número de un lote que ya tiene consumo',
+      );
+    }
+
+    const updatePayload: Record<string, unknown> = { ...batchChanges };
+
+    if (supplierChanged && batchChanges.supplierId) {
+      await this.supplierService.assertAssignable(batchChanges.supplierId);
+    }
+
+    if (batchNumberProvided) {
+      const item = await this.itemService.findOne(String(currentBatch.itemId));
+      const normalizedBatchNumber = this.buildBatchNumber(
+        batchChanges.batchNumber,
+        item?.sku,
+      );
+      if (hasConsumption && normalizedBatchNumber !== currentBatch.batchNumber) {
+        throw new BadRequestException(
+          'No se puede modificar el número de un lote que ya tiene consumo',
+        );
+      }
+      updatePayload.batchNumber = normalizedBatchNumber;
+    } else {
+      delete updatePayload.batchNumber;
+    }
+
+    if (costChanged && !hasConsumption) {
+      updatePayload.purchaseCost = batchChanges.cost;
+    }
+
+    if (batchChanges.expirationDate !== undefined) {
+      const createdAt = (currentBatch as unknown as { createdAt?: Date })
+        .createdAt;
+      if (createdAt) {
+        const expDate = new Date(batchChanges.expirationDate);
+        const expDay = Date.UTC(
+          expDate.getUTCFullYear(),
+          expDate.getUTCMonth(),
+          expDate.getUTCDate(),
+        );
+        const entryDate = new Date(createdAt);
+        const entryDay = Date.UTC(
+          entryDate.getUTCFullYear(),
+          entryDate.getUTCMonth(),
+          entryDate.getUTCDate(),
+        );
+        if (expDay < entryDay) {
+          throw new BadRequestException(
+            'La fecha de caducidad no puede ser anterior a la fecha de ingreso del lote',
+          );
+        }
+      }
     }
 
     const nextQuantity = batchChanges.quantity ?? currentBatch.quantity;
@@ -386,9 +459,19 @@ export class BatchService implements OnModuleInit {
       );
     }
 
-    const updatedBatch = await this.batchModel
-      .findByIdAndUpdate(id, { ...batchChanges, status }, { new: true })
-      .exec();
+    let updatedBatch: Batch | null;
+    try {
+      updatedBatch = await this.batchModel
+        .findByIdAndUpdate(id, { ...updatePayload, status }, { new: true })
+        .exec();
+    } catch (error) {
+      if (this.isDuplicateKeyError(error)) {
+        throw new ConflictException(
+          `Ya existe un lote con el número '${String(updatePayload.batchNumber ?? '')}' para este item`,
+        );
+      }
+      throw error;
+    }
 
     if (!updatedBatch) {
       throw new NotFoundException(`Lote con id '${id}' no encontrado`);
