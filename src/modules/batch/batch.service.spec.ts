@@ -330,7 +330,7 @@ describe('BatchService', () => {
       const result = await service.update(mockBatchId, updateDto);
       expect(MockModel.findByIdAndUpdate).toHaveBeenCalledWith(
         mockBatchId,
-        { ...updateDto, status: BatchStatus.ACTIVE },
+        { ...updateDto, initialQuantity: 50, status: BatchStatus.ACTIVE },
         { new: true },
       );
       expect(itemService.updateStockAndCost).toHaveBeenCalled();

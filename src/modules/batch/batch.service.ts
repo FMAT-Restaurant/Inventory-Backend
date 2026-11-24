@@ -457,6 +457,12 @@ export class BatchService implements OnModuleInit {
     }
 
     const nextQuantity = batchChanges.quantity ?? currentBatch.quantity;
+    if (
+      batchChanges.quantity !== undefined &&
+      Number(nextQuantity) > Number(currentBatch.initialQuantity ?? 0)
+    ) {
+      updatePayload.initialQuantity = nextQuantity;
+    }
     const nextExpirationDate =
       batchChanges.expirationDate !== undefined
         ? (batchChanges.expirationDate || null)
