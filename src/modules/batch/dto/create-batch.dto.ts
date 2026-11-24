@@ -5,10 +5,11 @@ import {
   IsNotEmpty,
   IsNumber,
   IsOptional,
+  IsPositive,
   IsString,
   Max,
   MaxLength,
-  Min,
+  ValidateIf,
 } from 'class-validator';
 import {
   AMOUNT_DECIMALS,
@@ -39,17 +40,20 @@ export class CreateBatchDto {
   @ApiProperty({ description: 'Cantidad del lote', example: 100 })
   @IsNumber()
   @MaxDecimals(QUANTITY_DECIMALS)
-  @Min(0)
+  @IsPositive()
   @Max(MAX_QUANTITY)
   quantity: number;
 
-  @ApiProperty({
-    description: 'Fecha de expiración',
+  @ApiPropertyOptional({
+    description:
+      'Fecha de expiración (obligatoria para insumos perecederos; opcional para no perecederos)',
     example: '2026-12-31T23:59:59Z',
+    nullable: true,
   })
+  @ValidateIf((_, value) => value !== null && value !== undefined && value !== '')
   @IsDateString()
-  @IsNotEmpty()
-  expirationDate: string;
+  @IsOptional()
+  expirationDate?: string | null;
 
   @ApiPropertyOptional({
     description: 'ID del proveedor (ObjectId)',
@@ -62,7 +66,7 @@ export class CreateBatchDto {
   @ApiProperty({ description: 'Costo unitario del lote', example: 150.5 })
   @IsNumber()
   @MaxDecimals(AMOUNT_DECIMALS)
-  @Min(0)
+  @IsPositive()
   @Max(MAX_AMOUNT)
   cost: number;
 }

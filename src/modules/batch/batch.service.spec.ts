@@ -20,6 +20,7 @@ describe('BatchService', () => {
   const mockExecFind = vi.fn();
   const mockExecFindById = vi.fn();
   const mockExecFindByIdAndUpdate = vi.fn();
+  const mockExecFindOneAndUpdate = vi.fn();
   const mockExecDeleteOne = vi.fn();
   const mockExecUpdateOne = vi.fn();
   const mockExecCount = vi.fn();
@@ -70,6 +71,9 @@ describe('BatchService', () => {
   MockModel.findByIdAndUpdate = vi
     .fn()
     .mockReturnValue({ exec: mockExecFindByIdAndUpdate });
+  MockModel.findOneAndUpdate = vi
+    .fn()
+    .mockReturnValue({ exec: mockExecFindOneAndUpdate });
   MockModel.deleteOne = vi.fn().mockReturnValue({ exec: mockExecDeleteOne });
   MockModel.updateOne = vi.fn().mockReturnValue({ exec: mockExecUpdateOne });
 
@@ -128,6 +132,41 @@ describe('BatchService', () => {
 
   it('debería estar definido', () => {
     expect(service).toBeDefined();
+  });
+
+  describe('create (no perecederos vs perecederos)', () => {
+    it('permite crear un lote sin fecha de caducidad para insumos no perecederos y lo deja ACTIVE', async () => {
+      mockItemService.findOne.mockResolvedValueOnce({
+        _id: mockItemId,
+        sku: 'UTC-01',
+        isPerishable: false,
+      });
+
+      const result = await service.create({
+        itemId: mockItemId,
+        quantity: 50,
+        cost: 1.5,
+      });
+
+      expect(result.status).toBe(BatchStatus.ACTIVE);
+      expect(result.expirationDate).toBeNull();
+    });
+
+    it('rechaza crear un lote sin fecha de caducidad si el insumo es perecedero', async () => {
+      mockItemService.findOne.mockResolvedValueOnce({
+        _id: mockItemId,
+        sku: 'VER-01',
+        isPerishable: true,
+      });
+
+      await expect(
+        service.create({
+          itemId: mockItemId,
+          quantity: 10,
+          cost: 15,
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
   });
 
   describe('findAll', () => {
@@ -318,7 +357,7 @@ describe('BatchService', () => {
       const result = await service.update(mockBatchId, updateDto);
       expect(MockModel.findByIdAndUpdate).toHaveBeenCalledWith(
         mockBatchId,
-        { ...updateDto, status: BatchStatus.ACTIVE },
+        { ...updateDto, initialQuantity: 50, status: BatchStatus.ACTIVE },
         { new: true },
       );
       expect(itemService.updateStockAndCost).toHaveBeenCalled();
@@ -334,9 +373,144 @@ describe('BatchService', () => {
 
     it('debería lanzar BadRequestException si no hay campos para actualizar', async () => {
       await expect(
-        service.update(mockBatchId, { reason: undefined, createdBy: undefined }),
+        service.update(mockBatchId, { reason: undefined }),
       ).rejects.toThrow(BadRequestException);
       expect(MockModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('debería bloquear la edición de un lote agotado', async () => {
+      mockExecFindById.mockResolvedValue({
+        ...mockBatch,
+        quantity: 0,
+        status: BatchStatus.DEPLETED,
+      });
+
+      await expect(
+        service.update(mockBatchId, { quantity: 5 }),
+      ).rejects.toThrow(BadRequestException);
+      expect(MockModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('debería bloquear edición de lote caducado salvo baja a cantidad 0', async () => {
+      const expiredBatch = {
+        ...mockBatch,
+        expirationDate: new Date('2020-01-01'),
+        status: BatchStatus.EXPIRED,
+      };
+      mockExecFindById.mockResolvedValue(expiredBatch);
+
+      await expect(
+        service.update(mockBatchId, { cost: 20 }),
+      ).rejects.toThrow(BadRequestException);
+      expect(MockModel.findByIdAndUpdate).not.toHaveBeenCalled();
+
+      mockExecFindByIdAndUpdate.mockResolvedValue({
+        ...expiredBatch,
+        quantity: 0,
+        status: BatchStatus.DEPLETED,
+      });
+      await expect(
+        service.update(mockBatchId, { quantity: 0, reason: 'Baja por merma' }),
+      ).resolves.toBeDefined();
+      expect(mockStockMovementService.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          batchId: mockBatchId,
+          movementType: StockMovementType.WASTE,
+          quantity: expiredBatch.quantity,
+          reason: 'Baja por merma',
+        }),
+      );
+    });
+
+    it('debería lanzar ConflictException si reducir el lote deja menos stock del reservado', async () => {
+      mockExecFindById.mockResolvedValue(mockBatch); // quantity: 10
+      mockItemService.findOne.mockResolvedValueOnce({
+        _id: mockItemId,
+        reservedStock: 8,
+      });
+      mockExecFind.mockResolvedValueOnce([mockBatch]);
+
+      await expect(
+        service.update(mockBatchId, { quantity: 5 }),
+      ).rejects.toThrow(ConflictException);
+      expect(MockModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('debería bloquear cambios a cost, supplierId o batchNumber si el lote ya tiene consumo', async () => {
+      mockExecFindById.mockResolvedValue({
+        ...mockBatch,
+        initialQuantity: 10,
+        quantity: 6,
+      });
+
+      await expect(
+        service.update(mockBatchId, { cost: 25 }),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service.update(mockBatchId, { supplierId: '60d5ec9af682fbd39a1b865c' }),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service.update(mockBatchId, { batchNumber: 'NUEVO-01' }),
+      ).rejects.toThrow(BadRequestException);
+      expect(MockModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('debería rechazar expirationDate anterior a la fecha de ingreso del lote', async () => {
+      mockExecFindById.mockResolvedValue({
+        ...mockBatch,
+        createdAt: new Date('2026-11-23T12:00:00.000Z'),
+      });
+
+      await expect(
+        service.update(mockBatchId, { expirationDate: '2026-11-20' }),
+      ).rejects.toThrow(BadRequestException);
+      expect(MockModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('debería permitir quitar expirationDate en no perecedero y rechazarlo en perecedero', async () => {
+      mockExecFindById.mockResolvedValue(mockBatch);
+      mockItemService.findOne.mockResolvedValueOnce({
+        _id: mockItemId,
+        isPerishable: true,
+      });
+
+      await expect(
+        service.update(mockBatchId, { expirationDate: null }),
+      ).rejects.toThrow(BadRequestException);
+
+      mockItemService.findOne.mockResolvedValueOnce({
+        _id: mockItemId,
+        isPerishable: false,
+      });
+      mockExecFindByIdAndUpdate.mockResolvedValueOnce({
+        ...mockBatch,
+        expirationDate: null,
+      });
+
+      await expect(
+        service.update(mockBatchId, { expirationDate: null }),
+      ).resolves.toBeDefined();
+    });
+
+    it('debería validar proveedor al cambiar supplierId y lanzar ConflictException si batchNumber choca', async () => {
+      mockExecFindById.mockResolvedValue(mockBatch);
+      mockItemService.findOne.mockResolvedValueOnce({
+        _id: mockItemId,
+        sku: 'TOM-01',
+      });
+      mockExecFindByIdAndUpdate.mockRejectedValueOnce(
+        Object.assign(new Error('E11000 duplicate key'), { code: 11000 }),
+      );
+
+      await expect(
+        service.update(mockBatchId, {
+          supplierId: '60d5ec9af682fbd39a1b865c',
+          batchNumber: 'DUP-01',
+        }),
+      ).rejects.toThrow(ConflictException);
+      expect(mockSupplierService.assertAssignable).toHaveBeenCalledWith(
+        '60d5ec9af682fbd39a1b865c',
+      );
     });
   });
 
@@ -356,6 +530,46 @@ describe('BatchService', () => {
         NotFoundException,
       );
     });
+
+    it('debería bloquear eliminación de lote caducado o agotado', async () => {
+      mockExecFindById.mockResolvedValue({
+        ...mockBatch,
+        expirationDate: new Date('2020-01-01'),
+        status: BatchStatus.EXPIRED,
+      });
+
+      await expect(service.remove(mockBatchId)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(MockModel.deleteOne).not.toHaveBeenCalled();
+    });
+
+    it('debería bloquear eliminación de lote que ya tuvo consumo', async () => {
+      mockExecFindById.mockResolvedValue({
+        ...mockBatch,
+        initialQuantity: 10,
+        quantity: 6,
+      });
+
+      await expect(service.remove(mockBatchId)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(MockModel.deleteOne).not.toHaveBeenCalled();
+    });
+
+    it('debería lanzar ConflictException si eliminar el lote afecta stock reservado', async () => {
+      mockExecFindById.mockResolvedValue(mockBatch);
+      mockItemService.findOne.mockResolvedValueOnce({
+        _id: mockItemId,
+        reservedStock: 4,
+      });
+      mockExecFind.mockResolvedValueOnce([mockBatch]);
+
+      await expect(service.remove(mockBatchId)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(MockModel.deleteOne).not.toHaveBeenCalled();
+    });
   });
 
   describe('movimientos de stock', () => {
@@ -372,18 +586,21 @@ describe('BatchService', () => {
       );
     });
 
-    it('registra un ajuste firmado al actualizar la cantidad de un lote', async () => {
+    it('registra un ajuste firmado con el usuario del controlador al actualizar la cantidad', async () => {
       mockExecFindById.mockResolvedValue(mockBatch);
       mockExecFindByIdAndUpdate.mockResolvedValue({
         ...mockBatch,
         quantity: 50,
       });
 
-      await service.update(mockBatchId, {
-        quantity: 50,
-        reason: 'Conteo físico',
-        createdBy: 'chef-1',
-      });
+      await service.update(
+        mockBatchId,
+        {
+          quantity: 50,
+          reason: 'Conteo físico',
+        },
+        'chef-1',
+      );
 
       expect(mockStockMovementService.record).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -471,9 +688,30 @@ describe('BatchService', () => {
         expirationDate: new Date('2099-02-01'),
       });
 
+      const firstAfter = batchDoc({
+        _id: 'first',
+        quantity: 0,
+        cost: 10,
+        expirationDate: new Date('2099-01-01'),
+        status: BatchStatus.ACTIVE,
+      });
+      const secondAfter = batchDoc({
+        _id: 'second',
+        quantity: 2,
+        cost: 20,
+        expirationDate: new Date('2099-02-01'),
+        status: BatchStatus.ACTIVE,
+      });
+
       mockExecFind
         .mockResolvedValueOnce([expired, first, second])
-        .mockResolvedValueOnce([first, second]);
+        .mockResolvedValueOnce([
+          { ...firstAfter, status: BatchStatus.DEPLETED },
+          secondAfter,
+        ]);
+      mockExecFindOneAndUpdate
+        .mockResolvedValueOnce(firstAfter)
+        .mockResolvedValueOnce(secondAfter);
 
       await service.consumeByFefo(mockItemId, 6, 'ORD-1');
 
@@ -482,13 +720,22 @@ describe('BatchService', () => {
         expirationDate: 1,
         _id: 1,
       });
-      expect(expired.save).not.toHaveBeenCalled();
-      expect(first.quantity).toBe(0);
-      expect(first.status).toBe(BatchStatus.DEPLETED);
-      expect(first.save).toHaveBeenCalledOnce();
-      expect(second.quantity).toBe(2);
-      expect(second.status).toBe(BatchStatus.ACTIVE);
-      expect(second.save).toHaveBeenCalledOnce();
+      expect(MockModel.findOneAndUpdate).toHaveBeenNthCalledWith(
+        1,
+        { _id: 'first', quantity: { $gte: 3 } },
+        { $inc: { quantity: -3 } },
+        { new: true },
+      );
+      expect(MockModel.findOneAndUpdate).toHaveBeenNthCalledWith(
+        2,
+        { _id: 'second', quantity: { $gte: 3 } },
+        { $inc: { quantity: -3 } },
+        { new: true },
+      );
+      expect(MockModel.updateOne).toHaveBeenCalledWith(
+        { _id: 'first', quantity: { $lte: 0.0005 } },
+        { $set: { status: BatchStatus.DEPLETED } },
+      );
 
       expect(mockStockMovementService.record).toHaveBeenNthCalledWith(
         1,
@@ -518,14 +765,19 @@ describe('BatchService', () => {
 
     it('deja de consumir cuando cubre la cantidad solicitada', async () => {
       const batch = batchDoc({ _id: 'only', quantity: 10 });
+      const batchAfter = batchDoc({ _id: 'only', quantity: 6 });
       mockExecFind
         .mockResolvedValueOnce([batch])
-        .mockResolvedValueOnce([batch]);
+        .mockResolvedValueOnce([batchAfter]);
+      mockExecFindOneAndUpdate.mockResolvedValueOnce(batchAfter);
 
       await service.consumeByFefo(mockItemId, 4, undefined, 'Merma');
 
-      expect(batch.quantity).toBe(6);
-      expect(batch.save).toHaveBeenCalledOnce();
+      expect(MockModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'only', quantity: { $gte: 4 } },
+        { $inc: { quantity: -4 } },
+        { new: true },
+      );
       expect(mockStockMovementService.record).toHaveBeenCalledWith(
         expect.objectContaining({
           quantity: 4,
@@ -533,6 +785,77 @@ describe('BatchService', () => {
           reason: 'Merma',
         }),
       );
+    });
+
+    it('reintenta FEFO cuando otro consumo concurrente modifica el lote', async () => {
+      const staleFirst = batchDoc({
+        _id: 'first',
+        quantity: 5,
+        cost: 10,
+        expirationDate: new Date('2099-01-01'),
+      });
+      const freshFirst = batchDoc({
+        _id: 'first',
+        quantity: 2,
+        cost: 10,
+        expirationDate: new Date('2099-01-01'),
+      });
+      const second = batchDoc({
+        _id: 'second',
+        quantity: 5,
+        cost: 20,
+        expirationDate: new Date('2099-02-01'),
+      });
+      const freshFirstAfter = batchDoc({
+        _id: 'first',
+        quantity: 0,
+        cost: 10,
+        expirationDate: new Date('2099-01-01'),
+      });
+      const secondAfter = batchDoc({
+        _id: 'second',
+        quantity: 3,
+        cost: 20,
+        expirationDate: new Date('2099-02-01'),
+      });
+
+      mockExecFind
+        // Intento 1: encuentra staleFirst (5) pero contiende
+        .mockResolvedValueOnce([staleFirst, second])
+        // Intento 2: relee freshFirst (2) y second (5)
+        .mockResolvedValueOnce([freshFirst, second])
+        // Sincronización final de stock
+        .mockResolvedValueOnce([
+          { ...freshFirstAfter, status: BatchStatus.DEPLETED },
+          secondAfter,
+        ]);
+
+      mockExecFindOneAndUpdate
+        .mockResolvedValueOnce(null) // contención en intento 1
+        .mockResolvedValueOnce(freshFirstAfter)
+        .mockResolvedValueOnce(secondAfter);
+
+      await service.consumeByFefo(mockItemId, 4, 'ORD-RACE');
+
+      expect(MockModel.findOneAndUpdate).toHaveBeenNthCalledWith(
+        1,
+        { _id: 'first', quantity: { $gte: 4 } },
+        { $inc: { quantity: -4 } },
+        { new: true },
+      );
+      expect(MockModel.findOneAndUpdate).toHaveBeenNthCalledWith(
+        2,
+        { _id: 'first', quantity: { $gte: 2 } },
+        { $inc: { quantity: -2 } },
+        { new: true },
+      );
+      expect(MockModel.findOneAndUpdate).toHaveBeenNthCalledWith(
+        3,
+        { _id: 'second', quantity: { $gte: 2 } },
+        { $inc: { quantity: -2 } },
+        { new: true },
+      );
+      expect(mockStockMovementService.record).toHaveBeenCalledTimes(2);
     });
 
     it('omite lotes expirados o agotados y sincroniza stock en cero', async () => {
@@ -548,8 +871,7 @@ describe('BatchService', () => {
 
       await service.consumeByFefo(mockItemId, 2);
 
-      expect(expired.save).not.toHaveBeenCalled();
-      expect(depleted.save).not.toHaveBeenCalled();
+      expect(MockModel.findOneAndUpdate).not.toHaveBeenCalled();
       expect(mockStockMovementService.record).not.toHaveBeenCalled();
       expect(mockItemService.updateStockAndCost).toHaveBeenCalledWith(
         mockItemId,
@@ -560,9 +882,11 @@ describe('BatchService', () => {
 
     it('tolera que falle el registro de un movimiento', async () => {
       const batch = batchDoc({ _id: 'only', quantity: 5 });
+      const batchAfter = batchDoc({ _id: 'only', quantity: 3 });
       mockExecFind
         .mockResolvedValueOnce([batch])
-        .mockResolvedValueOnce([batch]);
+        .mockResolvedValueOnce([batchAfter]);
+      mockExecFindOneAndUpdate.mockResolvedValueOnce(batchAfter);
       mockStockMovementService.record.mockRejectedValueOnce(
         new Error('auditoría caída'),
       );
@@ -571,8 +895,40 @@ describe('BatchService', () => {
         service.consumeByFefo(mockItemId, 2),
       ).resolves.toBeUndefined();
 
-      expect(batch.quantity).toBe(3);
+      expect(MockModel.findOneAndUpdate).toHaveBeenCalledOnce();
       expect(mockItemService.updateStockAndCost).toHaveBeenCalled();
+    });
+
+    it('consume lotes sin caducidad después de los que sí tienen fecha en previewFefoAllocation', async () => {
+      const noExpiry = batchDoc({
+        _id: 'no-exp',
+        batchNumber: 'NO-EXP',
+        quantity: 10,
+        expirationDate: null,
+      });
+      const withExpiry = batchDoc({
+        _id: 'with-exp',
+        batchNumber: 'WITH-EXP',
+        quantity: 3,
+        expirationDate: new Date('2099-05-01'),
+      });
+      mockExecFind.mockResolvedValueOnce([noExpiry, withExpiry]);
+
+      const plan = await service.previewFefoAllocation(mockItemId, 5);
+      expect(plan).toEqual([
+        {
+          batchId: 'with-exp',
+          batchNumber: 'WITH-EXP',
+          expirationDate: '2099-05-01T00:00:00.000Z',
+          quantity: 3,
+        },
+        {
+          batchId: 'no-exp',
+          batchNumber: 'NO-EXP',
+          expirationDate: '',
+          quantity: 2,
+        },
+      ]);
     });
 
     it('no sincroniza si el itemId no es un ObjectId válido', async () => {
@@ -764,11 +1120,20 @@ describe('BatchService', () => {
 
       expect(MockModel.find).toHaveBeenCalledWith({
         status: { $in: [BatchStatus.ACTIVE, BatchStatus.EXPIRES_TODAY] },
-        expirationDate: { $lt: new Date('2026-11-11T00:00:00.000Z') },
+        expirationDate: { $ne: null, $lt: new Date('2026-11-11T00:00:00.000Z') },
       });
       expect(MockModel.updateOne).toHaveBeenCalledWith(
         { _id: 'lote-vencido' },
         { status: BatchStatus.EXPIRED },
+      );
+      expect(mockStockMovementService.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          batchId: 'lote-vencido',
+          movementType: StockMovementType.WASTE,
+          quantity: mockBatch.quantity,
+          reason: 'Caducidad automática de lote',
+          createdBy: 'system',
+        }),
       );
       expect(itemService.updateStockAndCost).toHaveBeenCalledWith(
         mockItemId,
